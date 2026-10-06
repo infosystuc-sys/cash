@@ -43,7 +43,7 @@ export function Sidebar() {
     const { count, error } = await supabase.from("cuentas").select("id", { count: "exact", head: true }).eq("activa", true);
     if (error) throw new Error(error.message);
     return count ?? 0;
-  });
+  }, [location.pathname]); // se recalcula al cambiar de sección (p.ej. después de crear o eliminar cuentas)
 
   return (
     <aside className="fixed inset-y-0 left-0 w-64 bg-surface-container-lowest border-r border-outline-variant/30 flex flex-col z-50">

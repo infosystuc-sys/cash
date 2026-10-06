@@ -1422,6 +1422,25 @@ export type Database = {
           saldo_inicial: number
         }[]
       }
+      fn_cashflow_detalle: {
+        Args: { p_desde: string; p_hasta: string }
+        Returns: {
+          ars: number
+          concepto: string
+          detalle: string
+          fecha: string
+          origen: string
+          proyectado: boolean
+        }[]
+      }
+      fn_cashflow_saldo_base: {
+        Args: { p_inicio: string }
+        Returns: {
+          ars: number
+          concepto: string
+          orden: number
+        }[]
+      }
       hoy: { Args: never; Returns: string }
       rechazar_cheque: {
         Args: { p_cheque_id: number; p_fecha: string; p_motivo?: string }

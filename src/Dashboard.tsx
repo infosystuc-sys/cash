@@ -70,6 +70,77 @@ export default function Dashboard() {
 
   const flujo = useData(async () => check(await supabase.rpc("fn_cashflow", { p_desde: desde, p_hasta: hasta, p_periodo: periodo })), [desde, hasta, periodo]);
 
+  type FilaFlujo = NonNullable<typeof flujo.data>[number];
+  type Mov = { fecha: string; proyectado: boolean; origen: string; concepto: string; detalle: string | null; ars: number };
+
+  function verFlujo(f: FilaFlujo, que: "saldo_inicial" | "ingresos" | "egresos" | "neto" | "saldo_final") {
+    const nombre = etiquetaPeriodo(periodo, f.periodo_inicio);
+    const rango = `${fecha(f.periodo_inicio)} al ${fecha(f.periodo_fin)}`;
+    const anteriores = (flujo.data ?? []).filter((x) => x.periodo_inicio < f.periodo_inicio);
+
+    if (que === "saldo_inicial" || que === "saldo_final") {
+      const primero = flujo.data?.[0]?.periodo_inicio ?? f.periodo_inicio;
+      const composicion = async (): Promise<FilaSaldo[]> => {
+        const base = check(await supabase.rpc("fn_cashflow_saldo_base", { p_inicio: primero }));
+        const filas: FilaSaldo[] = base.map((b) => ({ tipo: "Base", nombre: b.concepto, detalle: "", importe: b.ars }));
+        if (anteriores.length) {
+          filas.push({
+            tipo: "Flujo",
+            nombre: `Flujo neto de períodos anteriores (${etiquetaPeriodo(periodo, anteriores[0].periodo_inicio)} a ${etiquetaPeriodo(periodo, anteriores[anteriores.length - 1].periodo_inicio)})`,
+            detalle: `${anteriores.length} período(s)`,
+            importe: anteriores.reduce((s, x) => s + x.neto, 0),
+          });
+        }
+        return filas;
+      };
+      if (que === "saldo_inicial") {
+        return detalle.abrir<FilaSaldo>({
+          titulo: `Saldo Inicial • ${nombre}`,
+          subtitulo: `Cómo se llega al saldo con que arranca el período (${rango})`,
+          cargar: composicion,
+          columnas: colsSaldo,
+          total: money(f.saldo_inicial),
+        });
+      }
+      return detalle.abrir<FilaSaldo>({
+        titulo: `Saldo Final • ${nombre}`,
+        subtitulo: `Saldo inicial + ingresos − egresos del período (${rango})`,
+        filas: [
+          { tipo: "Saldo inicial", nombre: "Saldo al comenzar el período", detalle: "", importe: f.saldo_inicial },
+          { tipo: "+ Ingresos", nombre: "Ingresos del período", detalle: "", importe: f.ingresos },
+          { tipo: "− Egresos", nombre: "Egresos del período", detalle: "", importe: -f.egresos },
+        ],
+        columnas: colsSaldo,
+        total: money(f.saldo_final),
+      });
+    }
+
+    const titulos = { ingresos: "Ingresos", egresos: "Egresos", neto: "Flujo Neto" } as const;
+    detalle.abrir<Mov>({
+      titulo: `${titulos[que]} • ${nombre}`,
+      subtitulo: `Movimientos reales y previstos del ${rango} (USD al TC actual; sin transferencias internas)`,
+      cargar: async () => {
+        const movs = check(await supabase.rpc("fn_cashflow_detalle", { p_desde: f.periodo_inicio, p_hasta: f.periodo_fin })) as Mov[];
+        return movs.filter((m) => (que === "ingresos" ? m.ars > 0 : que === "egresos" ? m.ars < 0 : m.ars !== 0));
+      },
+      columnas: [
+        { titulo: "Fecha", valor: (m) => fecha(m.fecha) },
+        {
+          titulo: "Tipo",
+          valor: (m) => (
+            <span className={cn("px-2 py-0.5 rounded text-[9px] font-bold uppercase whitespace-nowrap", m.proyectado ? "bg-secondary-fixed text-on-secondary-fixed" : "bg-surface-container-high text-on-surface-variant")}>
+              {ORIGEN_FLUJO[m.origen] ?? m.origen}
+            </span>
+          ),
+        },
+        { titulo: "Concepto", valor: (m) => <strong className="text-primary">{m.concepto}</strong> },
+        { titulo: "Cliente / Proveedor / Cuenta", valor: (m) => m.detalle ?? "—" },
+        { titulo: "Importe ARS", valor: (m) => <span className={m.ars < 0 ? "text-error" : "text-on-tertiary-container"}>{signedMoney(m.ars)}</span>, alinear: "right" },
+      ],
+      total: que === "ingresos" ? signedMoney(f.ingresos) : que === "egresos" ? money(-f.egresos) : signedMoney(f.neto),
+    });
+  }
+
   const k = useMemo(() => {
     if (!data) return null;
     const ars = (m: string | null, v: number | null) => (m === "USD" ? (v ?? 0) * data.tc : v ?? 0);
@@ -336,11 +407,21 @@ export default function Dashboard() {
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-4 text-right text-on-surface-variant font-numeric">{money(f.saldo_inicial)}</td>
-                        <td className="px-4 py-4 text-right text-on-tertiary-container font-bold font-numeric">{signedMoney(f.ingresos)}</td>
-                        <td className="px-4 py-4 text-right text-error font-bold font-numeric">{money(-f.egresos)}</td>
-                        <td className={cn("px-4 py-4 text-right font-bold font-numeric", neg ? "text-error" : "text-on-tertiary-container")}>{signedMoney(f.neto)}</td>
-                        <td className="px-4 py-4 text-right font-bold font-numeric text-primary">{money(f.saldo_final)}</td>
+                        <CeldaDetalle className="text-on-surface-variant" onClick={() => verFlujo(f, "saldo_inicial")}>
+                          {money(f.saldo_inicial)}
+                        </CeldaDetalle>
+                        <CeldaDetalle className="text-on-tertiary-container font-bold" onClick={() => verFlujo(f, "ingresos")}>
+                          {signedMoney(f.ingresos)}
+                        </CeldaDetalle>
+                        <CeldaDetalle className="text-error font-bold" onClick={() => verFlujo(f, "egresos")}>
+                          {money(-f.egresos)}
+                        </CeldaDetalle>
+                        <CeldaDetalle className={cn("font-bold", neg ? "text-error" : "text-on-tertiary-container")} onClick={() => verFlujo(f, "neto")}>
+                          {signedMoney(f.neto)}
+                        </CeldaDetalle>
+                        <CeldaDetalle className="font-bold text-primary" onClick={() => verFlujo(f, "saldo_final")}>
+                          {money(f.saldo_final)}
+                        </CeldaDetalle>
                         <td className="px-6 py-4 text-center">
                           <span
                             className={cn(
@@ -493,6 +574,28 @@ function Grafico({ filas }: { filas: { periodo_inicio: string; ingresos: number;
         </circle>
       ))}
     </svg>
+  );
+}
+
+const ORIGEN_FLUJO: Record<string, string> = {
+  cobro: "Cobro",
+  egreso: "Pago",
+  deposito_cheque: "Depósito cheque",
+  rechazo_cheque: "Rechazo cheque",
+  cobro_previsto: "Cobro previsto",
+  cheque_cartera: "Cheque a cobrar",
+  pago_previsto: "Pago previsto",
+};
+
+function CeldaDetalle({ children, className, onClick }: { children: React.ReactNode; className?: string; onClick: () => void }) {
+  return (
+    <td
+      onClick={onClick}
+      title="Ver composición"
+      className={cn("px-4 py-4 text-right font-numeric cursor-pointer hover:underline decoration-dotted underline-offset-4 hover:bg-surface-container-low", className)}
+    >
+      {children}
+    </td>
   );
 }
 
