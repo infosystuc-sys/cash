@@ -518,11 +518,14 @@ function InvoiceRow({
           <button onClick={onToggle} title="Ver vencimientos" className="p-1.5 rounded-lg text-outline hover:text-primary hover:bg-surface-container-high transition-colors">
             <ChevronDown className={cn("w-4 h-4 transition-transform", expandido && "rotate-180")} />
           </button>
-          {(i.cobrado ?? 0) === 0 && (
-            <button onClick={onEliminar} title="Eliminar" className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors">
-              <Trash2 className="w-4 h-4" />
-            </button>
-          )}
+          <button
+            onClick={onEliminar}
+            disabled={(i.cobrado ?? 0) > 0}
+            title={(i.cobrado ?? 0) > 0 ? "No se puede eliminar: tiene cobros registrados" : "Eliminar"}
+            className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors disabled:opacity-30 disabled:hover:text-outline disabled:hover:bg-transparent disabled:cursor-not-allowed"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
         </div>
       </td>
     </tr>

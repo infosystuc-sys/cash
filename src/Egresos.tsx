@@ -288,14 +288,17 @@ export default function Egresos() {
                       )}
                     </td>
                     <td className="px-4 py-4 text-right whitespace-nowrap">
-                      <button onClick={() => setEditando(e)} title="Editar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors opacity-0 group-hover:opacity-100">
+                      <button onClick={() => setEditando(e)} title="Editar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors">
                         <Pencil className="w-4 h-4" />
                       </button>
-                      {e.medio !== "cheque_endosado" && (
-                        <button onClick={() => eliminar(e)} title="Eliminar" className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors opacity-0 group-hover:opacity-100">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
+                      <button
+                        onClick={() => eliminar(e)}
+                        disabled={e.medio === "cheque_endosado"}
+                        title={e.medio === "cheque_endosado" ? "No se puede eliminar: corresponde al endoso de un cheque" : "Eliminar"}
+                        className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors disabled:opacity-30 disabled:hover:text-outline disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </td>
                   </tr>
                 ))}
