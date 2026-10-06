@@ -563,7 +563,7 @@ function EndosoModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: ()
             <option value="garantia">Endoso en Garantía</option>
           </select>
         </FormGroup>
-        <FormGroup label="Destinatario / Proveedor que recibe el endoso *" className="sm:col-span-2">
+        <FormGroup label="Destinatario / Proveedor que recibe el endoso *" className="sm:col-span-2" onNuevo={() => setNuevoProv(true)}>
           <select
             className={selectCls}
             value={proveedorId}

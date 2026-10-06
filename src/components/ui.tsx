@@ -7,10 +7,28 @@ export const inputCls =
   "w-full h-10 px-3 rounded-lg bg-surface-container-low border-0 text-xs font-medium focus:ring-2 focus:ring-secondary/20 outline-none";
 export const selectCls = cn(inputCls, "appearance-none cursor-pointer");
 
-export function FormGroup({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+export function FormGroup({
+  label,
+  children,
+  className,
+  onNuevo,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+  /** Muestra un botón "+ Nuevo" junto a la etiqueta (p.ej. para crear el cliente/proveedor sin salir del formulario) */
+  onNuevo?: () => void;
+}) {
   return (
     <div className={cn("flex flex-col gap-2", className)}>
-      <label className="text-[11px] font-bold text-primary uppercase tracking-wider">{label}</label>
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-[11px] font-bold text-primary uppercase tracking-wider">{label}</label>
+        {onNuevo && (
+          <button type="button" onClick={onNuevo} className="text-[10px] font-bold text-secondary hover:underline whitespace-nowrap">
+            + Nuevo
+          </button>
+        )}
+      </div>
       {children}
     </div>
   );

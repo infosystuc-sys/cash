@@ -472,7 +472,7 @@ function EgresoModal({ egreso, onClose, onSaved }: { egreso?: Egreso; onClose: (
         <FormGroup label="Concepto / Detalle Operativo *">
           <input className={inputCls} value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Pago mensual infraestructura cloud AWS" />
         </FormGroup>
-        <FormGroup label="Proveedor">
+        <FormGroup label="Proveedor" onNuevo={() => setNuevoProv(true)}>
           <select className={selectCls} value={proveedorId} onChange={(e) => (e.target.value === "nuevo" ? setNuevoProv(true) : setProveedorId(e.target.value))}>
             <option value="">Sin proveedor</option>
             {cat?.proveedores.map((p) => (

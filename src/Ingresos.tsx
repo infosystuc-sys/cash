@@ -776,7 +776,7 @@ function IngresoModal({
           <span className="text-[10px] text-outline italic">* Campos obligatorios</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-          <FormGroup label="Cliente *">
+          <FormGroup label="Cliente *" onNuevo={tieneCobros ? undefined : () => setCreando("cliente")}>
             <select
               className={selectCls}
               value={clienteId}
@@ -799,7 +799,7 @@ function IngresoModal({
               <option value="nuevo">+ Nuevo cliente…</option>
             </select>
           </FormGroup>
-          <FormGroup label="Tipo de Ingreso *">
+          <FormGroup label="Tipo de Ingreso *" onNuevo={() => setCreando("tipo")}>
             <select className={selectCls} value={tipoId} onChange={(e) => (e.target.value === "nuevo" ? setCreando("tipo") : setTipoId(e.target.value))}>
               {!tipoId && <option value="">Seleccionar…</option>}
               {tipos.map((t) => (

@@ -993,7 +993,7 @@ function DeudaModal({
       }
     >
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-        <FormGroup label="Acreedor / Proveedor *">
+        <FormGroup label="Acreedor / Proveedor *" onNuevo={tienePagos ? undefined : () => setNuevoProv(true)}>
           <select
             className={selectCls}
             value={proveedorId}
