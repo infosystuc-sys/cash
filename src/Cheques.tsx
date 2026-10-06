@@ -23,6 +23,7 @@ import { exportCsv } from "./lib/csv";
 import { fecha, hoyISO, iniciales, money, sumarDias, textoVencimiento } from "./lib/format";
 import { ProveedorModal } from "./Proveedores";
 import { ClienteModal } from "./Clientes";
+import { useDetalle, tarjetaClickeable, type ColumnaDetalle } from "./components/Detalle";
 import {
   CancelButton,
   EmptyRow,
@@ -53,6 +54,14 @@ export default function Cheques() {
   const [busqueda, setBusqueda] = useState("");
   const [accion, setAccion] = useState<{ tipo: "endosar" | "depositar" | "rechazar" | "editar"; cheque: Cheque } | null>(null);
   const [cargar, setCargar] = useState(false);
+  const detalle = useDetalle();
+  const colsCheque = (extra?: ColumnaDetalle<Cheque>): ColumnaDetalle<Cheque>[] => [
+    { titulo: "Fecha de pago", valor: (c) => fecha(c.fecha_pago) },
+    { titulo: "Cliente / Librador", valor: (c) => <strong className="text-primary">{c.cliente ?? c.librador ?? "—"}</strong> },
+    { titulo: "Cheque", valor: (c) => `#${c.numero} • ${c.banco_emisor} • ${c.tipo === "echeq" ? "eCheq" : "Físico"}` },
+    ...(extra ? [extra] : []),
+    { titulo: "Importe", valor: (c) => money(c.importe), alinear: "right" as const },
+  ];
 
   const { data, loading, error, reload } = useData(async () =>
     check(await supabase.from("v_cheques").select("*").order("fecha_pago", { ascending: true })),
@@ -150,6 +159,15 @@ export default function Cheques() {
           extra="ARS"
           color="text-secondary"
           bgColor="bg-secondary-fixed/30"
+          onClick={() =>
+            detalle.abrir({
+              titulo: "Total en Cartera",
+              subtitulo: "Cheques recibidos que todavía no se depositaron ni endosaron",
+              filas: cartera,
+              columnas: colsCheque({ titulo: "Se cobra", valor: (c) => textoVencimiento(c.fecha_pago, "En") }),
+              total: money(suma(cartera)),
+            })
+          }
         />
         <KpiCard
           title="A Cobrar en ≤ 7 Días"
@@ -160,6 +178,15 @@ export default function Cheques() {
           color="text-error"
           bgColor="bg-error-container/20"
           isAlert={proximos7.length > 0}
+          onClick={() =>
+            detalle.abrir({
+              titulo: "A Cobrar en ≤ 7 Días",
+              subtitulo: "Cheques en cartera con fecha de pago en los próximos 7 días (o ya pasada)",
+              filas: proximos7,
+              columnas: colsCheque({ titulo: "Se cobra", valor: (c) => textoVencimiento(c.fecha_pago, "En") }),
+              total: money(suma(proximos7)),
+            })
+          }
         />
         <KpiCard
           title="Total Endosados (Histórico)"
@@ -169,6 +196,15 @@ export default function Cheques() {
           extra={`${endosados.length} Operaciones`}
           color="text-on-tertiary-container"
           bgColor="bg-surface-container-high/40"
+          onClick={() =>
+            detalle.abrir({
+              titulo: "Total Endosados (Histórico)",
+              subtitulo: "Cheques entregados por endoso a proveedores",
+              filas: endosados,
+              columnas: colsCheque({ titulo: "Endosado a", valor: (c) => `${c.proveedor_endoso ?? ""} (${fecha(c.fecha_endoso)})` }),
+              total: money(suma(endosados)),
+            })
+          }
         />
       </div>
 
@@ -210,6 +246,7 @@ export default function Cheques() {
       </div>
 
       <ErrorBanner message={error} />
+      {detalle.modal}
 
       {/* Main Table */}
       <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-sm overflow-hidden">
@@ -273,6 +310,7 @@ function KpiCard({
   color,
   bgColor,
   isAlert = false,
+  onClick,
 }: {
   title: string;
   value: string;
@@ -282,9 +320,17 @@ function KpiCard({
   color: string;
   bgColor: string;
   isAlert?: boolean;
+  onClick?: () => void;
 }) {
   return (
-    <div className="relative overflow-hidden bg-surface-container-lowest border border-outline-variant/20 rounded-xl p-6 shadow-sm flex flex-col justify-between group hover:border-secondary/30 transition-all">
+    <div
+      onClick={onClick}
+      title={onClick ? "Ver detalle" : undefined}
+      className={cn(
+        "relative overflow-hidden bg-surface-container-lowest border border-outline-variant/20 rounded-xl p-6 shadow-sm flex flex-col justify-between group hover:border-secondary/30 transition-all",
+        onClick && tarjetaClickeable,
+      )}
+    >
       <div className={cn("absolute right-0 top-0 w-32 h-32 rounded-bl-[80px] pointer-events-none transition-transform group-hover:scale-110", bgColor)} />
       <div className="relative z-10">
         <div className="flex items-center justify-between">

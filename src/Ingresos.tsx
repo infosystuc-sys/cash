@@ -22,6 +22,7 @@ import { supabase, check, type Row } from "./lib/supabase";
 import { useData } from "./lib/useData";
 import { exportCsv } from "./lib/csv";
 import { ClienteModal } from "./Clientes";
+import { useDetalle, tarjetaClickeable, type ColumnaDetalle } from "./components/Detalle";
 import { fecha, hoyISO, iniciales, money, porcentaje, sumarDias, sumarMeses, textoVencimiento, type Moneda } from "./lib/format";
 import {
   CancelButton,
@@ -65,6 +66,7 @@ export default function Ingresos() {
   const [params, setParams] = useSearchParams();
   const [nuevo, setNuevo] = useState(params.get("nuevo") === "1");
   const [editando, setEditando] = useState<Ingreso | null>(null);
+  const detalle = useDetalle();
   const [cobrar, setCobrar] = useState<{ ingreso: Ingreso; vencimiento?: Vencimiento } | null>(null);
   const [expandido, setExpandido] = useState<number | null>(null);
 
@@ -112,7 +114,7 @@ export default function Ingresos() {
       check(
         await supabase
           .from("v_ingreso_vencimientos")
-          .select("id, fecha_vencimiento, saldo, moneda, ingreso_id, ingresos(cliente_id, tipo_ingreso_id)")
+          .select("id, numero, fecha_vencimiento, saldo, moneda, ingreso_id, ingresos(cliente_id, tipo_ingreso_id, descripcion, clientes(razon_social))")
           .gt("saldo", 0)
           .gte("fecha_vencimiento", hoy)
           .lte("fecha_vencimiento", finSemana > finMes ? finSemana : finMes),
@@ -125,12 +127,28 @@ export default function Ingresos() {
       (v) => (!clienteId || String(v.ingresos?.cliente_id) === clienteId) && (!tipoId || String(v.ingresos?.tipo_ingreso_id) === tipoId),
     );
     const resumen = (hasta: string) => {
-      const l = lista.filter((v) => v.fecha_vencimiento! <= hasta);
-      return { total: l.reduce((s, v) => s + ars(v, v.saldo), 0), cant: l.length };
+      const l = lista.filter((v) => v.fecha_vencimiento! <= hasta).sort((a, b) => a.fecha_vencimiento!.localeCompare(b.fecha_vencimiento!));
+      return { total: l.reduce((s, v) => s + ars(v, v.saldo), 0), cant: l.length, lista: l };
     };
     return { semana: resumen(finSemana), mes: resumen(finMes) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [proximos.data, clienteId, tipoId, tc, finSemana, finMes]);
+
+  const colsIngreso = (tituloImporte: string, importe: (i: Ingreso) => number | null): ColumnaDetalle<Ingreso>[] => [
+    { titulo: "Fecha", valor: (i) => fecha(i.fecha_factura) },
+    { titulo: "Cliente", valor: (i) => <strong className="text-primary">{i.cliente}</strong> },
+    { titulo: "Descripción", valor: (i) => i.descripcion },
+    { titulo: "Próx. Vto.", valor: (i) => fecha(i.proximo_vencimiento), alinear: "center" },
+    { titulo: tituloImporte, valor: (i) => money(importe(i), i.moneda as Moneda), alinear: "right" },
+    { titulo: `${tituloImporte} ARS`, valor: (i) => money(ars(i, importe(i))), alinear: "right" },
+  ];
+  const colsVencimiento: ColumnaDetalle<NonNullable<typeof proximos.data>[number]>[] = [
+    { titulo: "Vencimiento", valor: (v) => fecha(v.fecha_vencimiento) },
+    { titulo: "Cliente", valor: (v) => <strong className="text-primary">{v.ingresos?.clientes?.razon_social}</strong> },
+    { titulo: "Descripción", valor: (v) => `${v.ingresos?.descripcion ?? ""} • cuota ${v.numero}` },
+    { titulo: "Saldo", valor: (v) => money(v.saldo, v.moneda as Moneda), alinear: "right" },
+    { titulo: "Saldo ARS", valor: (v) => money(ars(v, v.saldo)), alinear: "right" },
+  ];
 
   const base = useMemo(
     () =>
@@ -237,7 +255,22 @@ export default function Ingresos() {
 
       {/* KPI Summary Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-6">
-        <KpiCard title="Total Facturado Período" value={money(kpi.total)} icon={<Receipt />} tag={`${base.length} comprobantes`} subtitle="en el período" />
+        <KpiCard
+          title="Total Facturado Período"
+          value={money(kpi.total)}
+          icon={<Receipt />}
+          tag={`${base.length} comprobantes`}
+          subtitle="en el período"
+          onClick={() =>
+            detalle.abrir({
+              titulo: "Total Facturado del Período",
+              subtitulo: "Facturas que suman el total (según filtros aplicados)",
+              filas: base,
+              columnas: colsIngreso("Importe", (i) => i.importe_total),
+              total: money(kpi.total),
+            })
+          }
+        />
         <KpiCard
           title="Cobrado Efectivo"
           value={money(kpi.cobrado)}
@@ -246,8 +279,51 @@ export default function Ingresos() {
           tag={`${porcentaje(kpi.cobrado, kpi.total)}% cobrado`}
           tagColor="bg-tertiary-container/10 text-on-tertiary-container"
           subtitle="aplicado a facturas"
+          onClick={() =>
+            detalle.abrir({
+              titulo: "Cobrado Efectivo",
+              subtitulo: "Cobros aplicados a las facturas del período",
+              cargar: async () => {
+                const ids = base.filter((i) => (i.cobrado ?? 0) > 0).map((i) => i.id!);
+                if (!ids.length) return [];
+                const venc = check(await supabase.from("ingreso_vencimientos").select("id").in("ingreso_id", ids));
+                return check(
+                  await supabase
+                    .from("cobros")
+                    .select("id, fecha, importe, moneda, medio, cuentas(nombre), cheques(numero, banco_emisor), clientes(razon_social), ingreso_vencimientos(numero, ingresos(descripcion))")
+                    .in("ingreso_vencimiento_id", venc.map((v) => v.id))
+                    .eq("anulado", false)
+                    .order("fecha"),
+                );
+              },
+              columnas: [
+                { titulo: "Fecha", valor: (c) => fecha(c.fecha) },
+                { titulo: "Cliente", valor: (c) => <strong className="text-primary">{c.clientes?.razon_social}</strong> },
+                { titulo: "Factura", valor: (c) => `${c.ingreso_vencimientos?.ingresos?.descripcion ?? ""} • cuota ${c.ingreso_vencimientos?.numero ?? ""}` },
+                { titulo: "Medio", valor: (c) => (c.medio === "cheque" ? `Cheque #${c.cheques?.numero} ${c.cheques?.banco_emisor}` : `${c.medio} → ${c.cuentas?.nombre ?? ""}`) },
+                { titulo: "Importe", valor: (c) => money(c.importe, c.moneda as Moneda), alinear: "right" },
+                { titulo: "Importe ARS", valor: (c) => money(ars(c, c.importe)), alinear: "right" },
+              ],
+              total: money(kpi.cobrado),
+            })
+          }
         />
-        <KpiCard title="Por Cobrar en Término" value={money(kpi.enTermino)} icon={<Calendar />} tag={`${kpi.cantEnTermino} facturas`} subtitle="no vencidas" />
+        <KpiCard
+          title="Por Cobrar en Término"
+          value={money(kpi.enTermino)}
+          icon={<Calendar />}
+          tag={`${kpi.cantEnTermino} facturas`}
+          subtitle="no vencidas"
+          onClick={() =>
+            detalle.abrir({
+              titulo: "Por Cobrar en Término",
+              subtitulo: "Facturas pendientes o con cobro parcial, sin vencimientos atrasados",
+              filas: base.filter((i) => i.estado === "pendiente" || i.estado === "cobrado_parcial"),
+              columnas: colsIngreso("Saldo", (i) => i.saldo),
+              total: money(kpi.enTermino),
+            })
+          }
+        />
         <KpiCard
           title="A Cobrar Esta Semana"
           value={money(aCobrar.semana.total)}
@@ -256,6 +332,15 @@ export default function Ingresos() {
           tag={`${aCobrar.semana.cant} vencimientos`}
           tagColor="bg-secondary-fixed text-on-secondary-fixed"
           subtitle={`hasta el ${fecha(finSemana).slice(0, 5)}`}
+          onClick={() =>
+            detalle.abrir({
+              titulo: "A Cobrar Esta Semana",
+              subtitulo: `Vencimientos pendientes del ${fecha(hoy)} al ${fecha(finSemana)}`,
+              filas: aCobrar.semana.lista,
+              columnas: colsVencimiento,
+              total: money(aCobrar.semana.total),
+            })
+          }
         />
         <KpiCard
           title="A Cobrar en el Mes"
@@ -265,6 +350,15 @@ export default function Ingresos() {
           tag={`${aCobrar.mes.cant} vencimientos`}
           tagColor="bg-secondary-fixed text-on-secondary-fixed"
           subtitle={`hasta el ${fecha(finMes).slice(0, 5)}`}
+          onClick={() =>
+            detalle.abrir({
+              titulo: "A Cobrar en el Mes",
+              subtitulo: `Vencimientos pendientes del ${fecha(hoy)} al ${fecha(finMes)}`,
+              filas: aCobrar.mes.lista,
+              columnas: colsVencimiento,
+              total: money(aCobrar.mes.total),
+            })
+          }
         />
         <KpiCard
           title="Vencido Impago"
@@ -274,6 +368,15 @@ export default function Ingresos() {
           tag={`${kpi.cantVencidos} facturas vencidas`}
           tagColor="bg-error-container/10 text-error"
           subtitle="requiere reclamo"
+          onClick={() =>
+            detalle.abrir({
+              titulo: "Vencido Impago",
+              subtitulo: "Facturas con al menos un vencimiento atrasado sin cobrar",
+              filas: base.filter((i) => i.estado === "vencido"),
+              columnas: colsIngreso("Saldo", (i) => i.saldo),
+              total: money(kpi.vencido),
+            })
+          }
         />
       </div>
 
@@ -409,6 +512,7 @@ export default function Ingresos() {
           }}
         />
       )}
+      {detalle.modal}
       {cobrar && catalogos.data && (
         <CobroModal
           ingreso={cobrar.ingreso}
@@ -435,6 +539,7 @@ function KpiCard({
   tag,
   tagColor = "bg-surface-container-high text-on-surface",
   subtitle,
+  onClick,
 }: {
   title: string;
   value: string;
@@ -443,9 +548,17 @@ function KpiCard({
   tag: string;
   tagColor?: string;
   subtitle: string;
+  onClick?: () => void;
 }) {
   return (
-    <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl p-6 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:border-secondary/30 transition-all">
+    <div
+      onClick={onClick}
+      title={onClick ? "Ver detalle" : undefined}
+      className={cn(
+        "bg-surface-container-lowest border border-outline-variant/20 rounded-xl p-6 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:border-secondary/30 transition-all",
+        onClick && tarjetaClickeable,
+      )}
+    >
       <div className="flex items-center justify-between mb-4">
         <span className="text-[10px] font-bold text-outline uppercase tracking-widest">{title}</span>
         <div className={cn("p-2 rounded-lg bg-surface-container-high transition-colors group-hover:bg-secondary group-hover:text-on-secondary", color)}>

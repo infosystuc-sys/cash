@@ -19,6 +19,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "./lib/utils";
+import { useDetalle, tarjetaClickeable, type ColumnaDetalle } from "./components/Detalle";
 import { supabase, check, type Row } from "./lib/supabase";
 import { useData } from "./lib/useData";
 import { exportCsv } from "./lib/csv";
@@ -51,6 +52,37 @@ const TIPOS_CUENTA: Record<string, string> = {
 export default function Cuentas() {
   const [transferir, setTransferir] = useState(false);
   const [editandoTransf, setEditandoTransf] = useState<Transferencia | null>(null);
+  const detalle = useDetalle();
+
+  type FilaSaldo = { tipo: string; nombre: string; detalle: string; importe: number };
+  const colsSaldo: ColumnaDetalle<FilaSaldo>[] = [
+    { titulo: "Tipo", valor: (f) => <span className="text-[10px] font-bold uppercase text-outline">{f.tipo}</span> },
+    { titulo: "Nombre", valor: (f) => <strong className="text-primary">{f.nombre}</strong> },
+    { titulo: "Detalle", valor: (f) => f.detalle },
+    { titulo: "Importe ARS", valor: (f) => money(f.importe), alinear: "right" },
+  ];
+  // Filas de saldo: cuentas (según filtro) y, opcionalmente, cada cheque en cartera
+  const filasSaldo = (filtroCuenta: (c: Cuenta) => boolean, conCheques: boolean): FilaSaldo[] =>
+    data
+      ? [
+          ...data.cuentas.filter(filtroCuenta).map((c) => ({
+            tipo: TIPOS_CUENTA[c.tipo ?? ""] ?? "Cuenta",
+            nombre: c.nombre ?? "",
+            detalle: c.moneda === "USD" ? `${money(c.saldo, "USD")} × TC ${data.tc ? money(data.tc) : "—"}` : "",
+            importe: c.saldo_ars ?? 0,
+          })),
+          ...(conCheques
+            ? data.cheques.map((ch) => ({
+                tipo: "Cheque en cartera",
+                nombre: `#${ch.numero} ${ch.banco_emisor}`,
+                detalle: `${ch.cliente ?? ch.librador ?? ""} • pago ${fecha(ch.fecha_pago)}`,
+                importe: ch.importe ?? 0,
+              }))
+            : []),
+        ]
+      : [];
+  const verSaldo = (titulo: string, filas: FilaSaldo[], total: number) =>
+    detalle.abrir({ titulo, subtitulo: "Saldos calculados desde movimientos; USD al TC actual", filas, columnas: colsSaldo, total: money(total) });
   const [editando, setEditando] = useState<Cuenta | "nueva" | null>(null);
   const [seleccionada, setSeleccionada] = useState<number | null>(null);
 
@@ -58,9 +90,14 @@ export default function Cuentas() {
     const hoy = hoyISO();
     const [cuentas, cheques, transferencias, cuotas, egresos3m, tc] = await Promise.all([
       supabase.from("v_cuentas_saldo").select("*").eq("activa", true).order("id"),
-      supabase.from("v_cheques").select("importe, dias_para_pago").eq("estado", "en_cartera"),
+      supabase.from("v_cheques").select("importe, dias_para_pago, numero, banco_emisor, fecha_pago, cliente, librador").eq("estado", "en_cartera").order("fecha_pago"),
       supabase.from("v_transferencias").select("*").order("fecha", { ascending: false }).order("id", { ascending: false }).limit(10),
-      supabase.from("v_deuda_cuotas").select("saldo, moneda").gt("saldo", 0).lte("fecha_vencimiento", sumarDias(hoy, 7)),
+      supabase
+        .from("v_deuda_cuotas")
+        .select("saldo, moneda, numero, fecha_vencimiento, estado, deudas(concepto, proveedores(razon_social))")
+        .gt("saldo", 0)
+        .lte("fecha_vencimiento", sumarDias(hoy, 7))
+        .order("fecha_vencimiento"),
       supabase.from("v_egresos").select("importe_ars").gte("fecha", sumarMeses(hoy, -3)),
       supabase.from("v_cotizacion_actual").select("venta").maybeSingle(),
     ]);
@@ -154,6 +191,7 @@ export default function Cuentas() {
 
       <ErrorBanner message={error} />
       {loading && !data && <Loading />}
+      {detalle.modal}
 
       {data && resumen && (
         <>
@@ -169,7 +207,13 @@ export default function Cuentas() {
                       <span className="text-[10px] font-bold text-outline uppercase tracking-widest font-display">Saldo Total Consolidado en Pesos (ARS)</span>
                     </div>
                     <div className="flex items-baseline gap-4 flex-wrap">
-                      <span className="text-[34px] leading-tight font-bold text-primary tracking-tight font-numeric">{money(resumen.total)}</span>
+                      <span
+                        title="Ver detalle"
+                        onClick={() => verSaldo("Saldo Total Consolidado", filasSaldo(() => true, true), resumen.total)}
+                        className={cn("text-[34px] leading-tight font-bold text-primary tracking-tight font-numeric rounded-lg px-1 -mx-1 transition-all", tarjetaClickeable)}
+                      >
+                        {money(resumen.total)}
+                      </span>
                       <span className="px-3 py-1 rounded-full bg-surface-container-high text-on-surface-variant text-[10px] font-bold uppercase flex items-center gap-1.5 border border-outline-variant/10">
                         <CheckCircle className="w-3.5 h-3.5 text-on-tertiary-container" />
                         {data.cuentas.length} cuentas + cartera de cheques
@@ -199,9 +243,26 @@ export default function Cuentas() {
                     />
                   </div>
                   <div className="flex flex-wrap gap-6 text-[10px] font-bold">
-                    <Legend color="bg-secondary" label="Bancos Operativos:" value={money(resumen.bancos)} />
-                    <Legend color="bg-secondary-fixed-dim" label="Dólares:" value={money(resumen.usd)} />
-                    <Legend color="bg-tertiary-container" label="Cartera & Efectivo:" value={money(resumen.cartera + resumen.efectivo)} />
+                    <Legend
+                      color="bg-secondary"
+                      label="Bancos Operativos:"
+                      value={money(resumen.bancos)}
+                      onClick={() => verSaldo("Bancos Operativos", filasSaldo((c) => c.moneda === "ARS" && c.tipo !== "efectivo", false), resumen.bancos)}
+                    />
+                    <Legend
+                      color="bg-secondary-fixed-dim"
+                      label="Dólares:"
+                      value={money(resumen.usd)}
+                      onClick={() => verSaldo("Cuentas en Dólares", filasSaldo((c) => c.moneda === "USD", false), resumen.usd)}
+                    />
+                    <Legend
+                      color="bg-tertiary-container"
+                      label="Cartera & Efectivo:"
+                      value={money(resumen.cartera + resumen.efectivo)}
+                      onClick={() =>
+                        verSaldo("Cartera & Efectivo", filasSaldo((c) => c.moneda === "ARS" && c.tipo === "efectivo", true), resumen.cartera + resumen.efectivo)
+                      }
+                    />
                   </div>
                 </div>
               </div>
@@ -218,8 +279,45 @@ export default function Cuentas() {
                     value={resumen.egresoMensual ? `${(resumen.total / resumen.egresoMensual).toFixed(1)} meses` : "—"}
                     color="text-on-surface"
                   />
-                  <StatItem label="Cheques próximos a vencer" value={`${resumen.chequesProximos} (en 7 días)`} color="text-secondary" />
-                  <StatItem label="Compromisos próximos 7 días" value={money(resumen.compromisos)} color="text-error" />
+                  <StatItem
+                    label="Cheques próximos a vencer"
+                    value={`${resumen.chequesProximos} (en 7 días)`}
+                    color="text-secondary"
+                    onClick={() => {
+                      const lista = data.cheques.filter((c) => (c.dias_para_pago ?? 99) <= 7);
+                      detalle.abrir({
+                        titulo: "Cheques Próximos a Vencer",
+                        subtitulo: "Cheques en cartera con fecha de pago en los próximos 7 días (o ya pasada)",
+                        filas: lista,
+                        columnas: [
+                          { titulo: "Fecha de pago", valor: (c) => fecha(c.fecha_pago) },
+                          { titulo: "Cliente / Librador", valor: (c) => <strong className="text-primary">{c.cliente ?? c.librador ?? "—"}</strong> },
+                          { titulo: "Cheque", valor: (c) => `#${c.numero} • ${c.banco_emisor}` },
+                          { titulo: "Importe", valor: (c) => money(c.importe), alinear: "right" },
+                        ],
+                        total: money(lista.reduce((s, c) => s + (c.importe ?? 0), 0)),
+                      });
+                    }}
+                  />
+                  <StatItem
+                    label="Compromisos próximos 7 días"
+                    value={money(resumen.compromisos)}
+                    color="text-error"
+                    onClick={() =>
+                      detalle.abrir({
+                        titulo: "Compromisos Próximos 7 Días",
+                        subtitulo: "Cuotas de deudas pendientes que vencen en 7 días o ya vencieron (USD al TC actual)",
+                        filas: data.cuotas,
+                        columnas: [
+                          { titulo: "Vencimiento", valor: (q) => <span className={q.estado === "vencida" ? "text-error font-bold" : ""}>{fecha(q.fecha_vencimiento)}</span> },
+                          { titulo: "Acreedor", valor: (q) => <strong className="text-primary">{q.deudas?.proveedores?.razon_social}</strong> },
+                          { titulo: "Concepto", valor: (q) => `${q.deudas?.concepto ?? ""} • cuota ${q.numero}` },
+                          { titulo: "Saldo ARS", valor: (q) => money(q.moneda === "USD" ? (q.saldo ?? 0) * (data.tc ?? 0) : q.saldo), alinear: "right" },
+                        ],
+                        total: money(resumen.compromisos),
+                      })
+                    }
+                  />
                 </div>
               </div>
               <div className="pt-6 mt-6 border-t border-outline-variant/10 flex items-center gap-3 text-xs text-on-surface-variant font-medium">
@@ -350,9 +448,9 @@ export default function Cuentas() {
   );
 }
 
-function Legend({ color, label, value }: { color: string; label: string; value: string }) {
+function Legend({ color, label, value, onClick }: { color: string; label: string; value: string; onClick?: () => void }) {
   return (
-    <div className="flex items-center gap-2">
+    <div onClick={onClick} title={onClick ? "Ver detalle" : undefined} className={cn("flex items-center gap-2 rounded px-1 -mx-1", onClick && "cursor-pointer hover:bg-surface-container-low")}>
       <div className={cn("w-2.5 h-2.5 rounded-full shadow-sm", color)} />
       <span className="text-outline uppercase">{label}</span>
       <span className="text-primary font-numeric">{value}</span>
@@ -500,9 +598,13 @@ function AccountDetail({
   );
 }
 
-function StatItem({ label, value, color }: { label: string; value: string; color: string }) {
+function StatItem({ label, value, color, onClick }: { label: string; value: string; color: string; onClick?: () => void }) {
   return (
-    <div className="flex items-center justify-between text-xs font-bold">
+    <div
+      onClick={onClick}
+      title={onClick ? "Ver detalle" : undefined}
+      className={cn("flex items-center justify-between text-xs font-bold rounded px-1 -mx-1 py-0.5", onClick && "cursor-pointer hover:bg-surface-container-low")}
+    >
       <span className="text-on-surface-variant font-medium">{label}</span>
       <span className={cn("font-numeric", color)}>{value}</span>
     </div>

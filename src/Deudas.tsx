@@ -23,6 +23,7 @@ import { useData } from "./lib/useData";
 import { exportCsv } from "./lib/csv";
 import { fecha, hoyISO, money, number, porcentaje, sumarDias, sumarMeses, textoVencimiento, type Moneda } from "./lib/format";
 import { ProveedorModal } from "./Proveedores";
+import { useDetalle, tarjetaClickeable } from "./components/Detalle";
 import {
   CancelButton,
   EmptyRow,
@@ -57,13 +58,24 @@ export default function Deudas() {
   const [seleccionada, setSeleccionada] = useState<number | null>(null);
   const [busqueda, setBusqueda] = useState("");
   const [filtro, setFiltro] = useState<Filtro>("todos");
+  const detalle = useDetalle();
 
   const { data, loading, error, reload } = useData(async () => {
     const hoy = hoyISO();
     const [deudas, proximas, pagadasMes, tc] = await Promise.all([
       supabase.from("v_deudas").select("*").order("proximo_vencimiento", { ascending: true, nullsFirst: false }),
-      supabase.from("v_deuda_cuotas").select("saldo, moneda").gt("saldo", 0).lte("fecha_vencimiento", sumarDias(hoy, 7)),
-      supabase.from("v_egresos").select("importe_ars").not("deuda_cuota_id", "is", null).gte("fecha", hoy.slice(0, 8) + "01"),
+      supabase
+        .from("v_deuda_cuotas")
+        .select("id, numero, fecha_vencimiento, estado, saldo, moneda, deudas(concepto, proveedores(razon_social))")
+        .gt("saldo", 0)
+        .lte("fecha_vencimiento", sumarDias(hoy, 7))
+        .order("fecha_vencimiento"),
+      supabase
+        .from("v_egresos")
+        .select("id, fecha, importe, moneda, importe_ars, proveedor, deuda_concepto, cuota_numero, medio, cuenta, cheque_numero")
+        .not("deuda_cuota_id", "is", null)
+        .gte("fecha", hoy.slice(0, 8) + "01")
+        .order("fecha"),
       supabase.from("v_cotizacion_actual").select("venta").maybeSingle(),
     ]);
     return { deudas: check(deudas), proximas: check(proximas), pagadasMes: check(pagadasMes), tc: tc.data?.venta ?? 0 };
@@ -158,7 +170,30 @@ export default function Deudas() {
 
       {/* KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <KpiCard title="Total Pasivos Pendientes" value={money(kpi.pendiente)} icon={<Receipt />} subtitle={`${kpi.activas} compromisos activos`} extra="En ARS al TC actual" color="text-secondary" />
+        <KpiCard
+          title="Total Pasivos Pendientes"
+          value={money(kpi.pendiente)}
+          icon={<Receipt />}
+          subtitle={`${kpi.activas} compromisos activos`}
+          extra="En ARS al TC actual"
+          color="text-secondary"
+          onClick={() =>
+            detalle.abrir({
+              titulo: "Total Pasivos Pendientes",
+              subtitulo: "Saldo pendiente de cada deuda no cancelada (USD al TC actual)",
+              filas: (data?.deudas ?? []).filter((d) => d.estado !== "cancelada"),
+              columnas: [
+                { titulo: "Acreedor", valor: (d) => <strong className="text-primary">{d.proveedor}</strong> },
+                { titulo: "Concepto", valor: (d) => d.concepto },
+                { titulo: "Cuotas", valor: (d) => `${d.cuotas_pagadas}/${d.cuotas_total}`, alinear: "center" },
+                { titulo: "Próx. Vto.", valor: (d) => fecha(d.proximo_vencimiento), alinear: "center" },
+                { titulo: "Saldo", valor: (d) => money(d.saldo, d.moneda as Moneda), alinear: "right" },
+                { titulo: "Saldo ARS", valor: (d) => money(ars(d.moneda, d.saldo)), alinear: "right" },
+              ],
+              total: money(kpi.pendiente),
+            })
+          }
+        />
         <KpiCard
           title="Vencimientos en ≤ 7 Días"
           value={money(kpi.proximas)}
@@ -167,6 +202,21 @@ export default function Deudas() {
           extra="Urgente"
           color="text-error"
           isAlert={kpi.cantProximas > 0}
+          onClick={() =>
+            detalle.abrir({
+              titulo: "Vencimientos en ≤ 7 Días",
+              subtitulo: "Cuotas pendientes que vencen en los próximos 7 días o ya vencieron",
+              filas: data?.proximas ?? [],
+              columnas: [
+                { titulo: "Vencimiento", valor: (q) => <span className={q.estado === "vencida" ? "text-error font-bold" : ""}>{fecha(q.fecha_vencimiento)}</span> },
+                { titulo: "Acreedor", valor: (q) => <strong className="text-primary">{q.deudas?.proveedores?.razon_social}</strong> },
+                { titulo: "Concepto", valor: (q) => `${q.deudas?.concepto ?? ""} • cuota ${q.numero}` },
+                { titulo: "Saldo", valor: (q) => money(q.saldo, q.moneda as Moneda), alinear: "right" },
+                { titulo: "Saldo ARS", valor: (q) => money(ars(q.moneda, q.saldo)), alinear: "right" },
+              ],
+              total: money(kpi.proximas),
+            })
+          }
         />
         <KpiCard
           title="Cuotas Pagadas este Mes"
@@ -175,6 +225,21 @@ export default function Deudas() {
           subtitle={`${kpi.cantPagadasMes} pagos imputados`}
           extra="Mes en curso"
           color="text-on-tertiary-container"
+          onClick={() =>
+            detalle.abrir({
+              titulo: "Cuotas Pagadas este Mes",
+              subtitulo: "Pagos imputados a cuotas de deudas desde el 1° del mes",
+              filas: data?.pagadasMes ?? [],
+              columnas: [
+                { titulo: "Fecha", valor: (e) => fecha(e.fecha) },
+                { titulo: "Acreedor", valor: (e) => <strong className="text-primary">{e.proveedor}</strong> },
+                { titulo: "Deuda", valor: (e) => `${e.deuda_concepto ?? ""} • cuota ${e.cuota_numero}` },
+                { titulo: "Medio", valor: (e) => (e.medio === "cheque_endosado" ? `Cheque #${e.cheque_numero}` : e.cuenta) },
+                { titulo: "Importe ARS", valor: (e) => money(e.importe_ars), alinear: "right" },
+              ],
+              total: money(kpi.pagadoMes),
+            })
+          }
         />
       </div>
 
@@ -203,6 +268,7 @@ export default function Deudas() {
       </div>
 
       <ErrorBanner message={error} />
+      {detalle.modal}
 
       {/* Data Table */}
       <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-sm overflow-hidden mb-12">
@@ -324,6 +390,7 @@ function KpiCard({
   extra,
   color,
   isAlert = false,
+  onClick,
 }: {
   title: string;
   value: string;
@@ -332,9 +399,17 @@ function KpiCard({
   extra: string;
   color: string;
   isAlert?: boolean;
+  onClick?: () => void;
 }) {
   return (
-    <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl p-6 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:border-secondary/30 transition-all">
+    <div
+      onClick={onClick}
+      title={onClick ? "Ver detalle" : undefined}
+      className={cn(
+        "bg-surface-container-lowest border border-outline-variant/20 rounded-xl p-6 shadow-sm flex flex-col justify-between relative overflow-hidden group hover:border-secondary/30 transition-all",
+        onClick && tarjetaClickeable,
+      )}
+    >
       <div className="flex items-center justify-between mb-4">
         <span className="text-[10px] font-bold text-outline uppercase tracking-widest">{title}</span>
         <div className={cn("p-2 rounded-lg transition-colors group-hover:bg-secondary group-hover:text-on-secondary bg-surface-container-high", color)}>

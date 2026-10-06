@@ -8,6 +8,7 @@ import { exportCsv } from "./lib/csv";
 import { fecha, hoyISO, money, porcentaje, sumarDias, sumarMeses, type Moneda } from "./lib/format";
 import { ProveedorModal } from "./Proveedores";
 import { codigoDeuda } from "./Deudas";
+import { useDetalle, tarjetaClickeable } from "./components/Detalle";
 import {
   CancelButton,
   EmptyRow,
@@ -56,6 +57,22 @@ export default function Egresos() {
   const [params, setParams] = useSearchParams();
   const [nuevo, setNuevo] = useState(params.get("nuevo") === "1");
   const [editando, setEditando] = useState<Egreso | null>(null);
+  const detalle = useDetalle();
+  const verEgresos = (titulo: string, lista: Egreso[]) =>
+    detalle.abrir({
+      titulo,
+      subtitulo: `${PERIODO_LABEL[periodo]} (${fecha(desde)} al ${fecha(hasta)})`,
+      filas: lista,
+      columnas: [
+        { titulo: "Fecha", valor: (e) => fecha(e.fecha) },
+        { titulo: "Concepto", valor: (e) => <strong className="text-primary">{e.concepto}</strong> },
+        { titulo: "Proveedor", valor: (e) => e.proveedor ?? "—" },
+        { titulo: "Categoría", valor: (e) => e.categoria },
+        { titulo: "Medio", valor: (e) => (e.medio === "cheque_endosado" ? `Cheque #${e.cheque_numero}` : e.cuenta) },
+        { titulo: "Importe ARS", valor: (e) => money(e.importe_ars), alinear: "right" },
+      ],
+      total: money(lista.reduce((s, e) => s + (e.importe_ars ?? 0), 0)),
+    });
 
   useEffect(() => {
     if (params.get("nuevo") === "1") {
@@ -174,7 +191,11 @@ export default function Egresos() {
               <span className="text-[10px] font-bold text-outline uppercase bg-surface-container-low px-1.5 py-0.5 rounded">{PERIODO_LABEL[periodo]}</span>
             </div>
           </div>
-          <div className="text-right">
+          <div
+            className={cn("text-right rounded-lg px-3 py-1 -mr-3 transition-all", tarjetaClickeable)}
+            title="Ver detalle"
+            onClick={() => verEgresos("Total Ejecutado", egresos)}
+          >
             <span className="text-[10px] font-bold text-outline uppercase block">Total Ejecutado (ARS)</span>
             <span className="text-xl font-bold font-numeric text-primary">{money(total)}</span>
           </div>
@@ -183,7 +204,14 @@ export default function Egresos() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           {distribucion.length === 0 && <p className="text-xs text-outline">Sin egresos en el período.</p>}
           {distribucion.map((c) => (
-            <CategoryMiniCard key={c.label} label={c.label} amount={money(c.total)} percent={porcentaje(c.total, total)} color={c.color} />
+            <CategoryMiniCard
+              key={c.label}
+              label={c.label}
+              amount={money(c.total)}
+              percent={porcentaje(c.total, total)}
+              color={c.color}
+              onClick={() => verEgresos(`Egresos: ${c.label}`, egresos.filter((e) => (e.categoria ?? "—") === c.label))}
+            />
           ))}
         </div>
       </div>
@@ -225,6 +253,7 @@ export default function Egresos() {
       </div>
 
       <ErrorBanner message={error} />
+      {detalle.modal}
 
       {/* Table */}
       <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-sm overflow-hidden mb-12">
@@ -327,9 +356,25 @@ export default function Egresos() {
   );
 }
 
-function CategoryMiniCard({ label, amount, percent, color }: { label: string; amount: string; percent: number; color: string }) {
+function CategoryMiniCard({
+  label,
+  amount,
+  percent,
+  color,
+  onClick,
+}: {
+  label: string;
+  amount: string;
+  percent: number;
+  color: string;
+  onClick?: () => void;
+}) {
   return (
-    <div className="p-4 bg-surface-container-low rounded-xl border border-outline-variant/10 space-y-3">
+    <div
+      onClick={onClick}
+      title={onClick ? "Ver detalle" : undefined}
+      className={cn("p-4 bg-surface-container-low rounded-xl border border-outline-variant/10 space-y-3 transition-all", onClick && tarjetaClickeable)}
+    >
       <div className="flex justify-between items-start gap-2">
         <span className="text-[9px] font-bold text-on-surface-variant uppercase tracking-wider truncate" title={label}>
           {label}

@@ -6,6 +6,7 @@ import { supabase, check } from "./lib/supabase";
 import { useData } from "./lib/useData";
 import { fecha, fechaCorta, hoyISO, money, signedMoney, sumarDias, sumarMeses, type Moneda } from "./lib/format";
 import { ErrorBanner, Loading, Segmented } from "./components/ui";
+import { useDetalle, tarjetaClickeable, type ColumnaDetalle } from "./components/Detalle";
 
 type Periodo = "day" | "week" | "month";
 
@@ -33,6 +34,7 @@ function etiquetaPeriodo(p: Periodo, ini: string) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const detalle = useDetalle();
   const [periodo, setPeriodo] = useState<Periodo>("week");
   const hoy = hoyISO();
   const desde = RANGOS[periodo].atras(hoy);
@@ -125,6 +127,7 @@ export default function Dashboard() {
       </div>
 
       <ErrorBanner message={error || flujo.error} />
+      {detalle.modal}
       {loading && !data && <Loading />}
 
       {data && k && (
@@ -137,6 +140,33 @@ export default function Dashboard() {
               tag={`${data.cuentas.length} cuentas`}
               subtitle="Cuentas + cartera de cheques"
               stats={`Cartera ${money(k.cartera)}`}
+              onClick={() =>
+                detalle.abrir<FilaSaldo>({
+                  titulo: "Saldo Total Consolidado",
+                  subtitulo: "Saldo de cada cuenta (USD al TC actual) y cheques en cartera",
+                  cargar: async () => {
+                    const cheques = check(
+                      await supabase.from("v_cheques").select("numero, banco_emisor, importe, fecha_pago, cliente, librador").eq("estado", "en_cartera").order("fecha_pago"),
+                    );
+                    return [
+                      ...data.cuentas.map((c) => ({
+                        tipo: "Cuenta",
+                        nombre: c.nombre ?? "",
+                        detalle: c.moneda === "USD" ? `${money(c.saldo, "USD")} × TC ${money(data.tc)}` : "",
+                        importe: c.saldo_ars ?? 0,
+                      })),
+                      ...cheques.map((ch) => ({
+                        tipo: "Cheque en cartera",
+                        nombre: `#${ch.numero} ${ch.banco_emisor}`,
+                        detalle: `${ch.cliente ?? ch.librador ?? ""} • pago ${fecha(ch.fecha_pago)}`,
+                        importe: ch.importe ?? 0,
+                      })),
+                    ];
+                  },
+                  columnas: colsSaldo,
+                  total: money(k.consolidado),
+                })
+              }
             />
             <KpiCard
               title="A Cobrar (Próx. 30 días)"
@@ -145,6 +175,20 @@ export default function Dashboard() {
               subtitle="Vencimientos facturados (incl. vencidos)"
               stats={`${data.cobros.filter((c) => c.estado === "vencido").length} vencidos`}
               statsColor="text-error"
+              onClick={() =>
+                detalle.abrir({
+                  titulo: "A Cobrar (Próx. 30 días)",
+                  subtitulo: `Vencimientos pendientes hasta el ${fecha(en30)}, incluidos los vencidos`,
+                  filas: data.cobros,
+                  columnas: [
+                    { titulo: "Vencimiento", valor: (v) => <span className={v.estado === "vencido" ? "text-error font-bold" : ""}>{fecha(v.fecha_vencimiento)}</span> },
+                    { titulo: "Cliente", valor: (v) => <strong className="text-primary">{v.ingresos?.clientes?.razon_social}</strong> },
+                    { titulo: "Descripción", valor: (v) => v.ingresos?.descripcion },
+                    { titulo: "Saldo", valor: (v) => money(v.moneda === "USD" ? (v.saldo ?? 0) * data.tc : v.saldo, "ARS"), alinear: "right" },
+                  ],
+                  total: money(k.cobrar),
+                })
+              }
             />
             <KpiCard
               title="A Pagar (Próx. 30 días)"
@@ -153,8 +197,38 @@ export default function Dashboard() {
               tagColor="bg-error-container text-error"
               subtitle="Cuotas de deudas pendientes"
               stats={data.tc ? `TC ${money(data.tc)}` : "Sin TC"}
+              onClick={() =>
+                detalle.abrir({
+                  titulo: "A Pagar (Próx. 30 días)",
+                  subtitulo: `Cuotas de deudas pendientes hasta el ${fecha(en30)}, incluidas las vencidas`,
+                  filas: data.pagos,
+                  columnas: [
+                    { titulo: "Vencimiento", valor: (q) => <span className={q.estado === "vencida" ? "text-error font-bold" : ""}>{fecha(q.fecha_vencimiento)}</span> },
+                    { titulo: "Acreedor", valor: (q) => <strong className="text-primary">{q.deudas?.proveedores?.razon_social}</strong> },
+                    { titulo: "Concepto", valor: (q) => `${q.deudas?.concepto ?? ""} • cuota ${q.numero}` },
+                    { titulo: "Saldo", valor: (q) => money(q.moneda === "USD" ? (q.saldo ?? 0) * data.tc : q.saldo, "ARS"), alinear: "right" },
+                  ],
+                  total: money(k.pagar),
+                })
+              }
             />
-            <div className="bg-primary text-on-primary rounded-xl p-6 shadow-md flex flex-col justify-between relative overflow-hidden">
+            <div
+              title="Ver detalle"
+              onClick={() =>
+                detalle.abrir<FilaSaldo>({
+                  titulo: "Saldo Proyectado 30 días",
+                  subtitulo: "Saldo actual + cobros previstos − pagos previstos",
+                  filas: [
+                    { tipo: "Saldo actual", nombre: "Cuentas + cartera de cheques", detalle: "", importe: k.consolidado },
+                    { tipo: "+ Cobros", nombre: "A cobrar próximos 30 días", detalle: `${data.cobros.length} vencimientos`, importe: k.cobrar },
+                    { tipo: "− Pagos", nombre: "A pagar próximos 30 días", detalle: `${data.pagos.length} cuotas`, importe: -k.pagar },
+                  ],
+                  columnas: colsSaldo,
+                  total: money(k.proyectado),
+                })
+              }
+              className={cn("bg-primary text-on-primary rounded-xl p-6 shadow-md flex flex-col justify-between relative overflow-hidden transition-all", tarjetaClickeable)}
+            >
               <div className="absolute top-0 right-0 w-32 h-32 bg-on-primary/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
               <div className="flex items-center justify-between mb-4">
                 <span className="text-[10px] font-bold text-primary-fixed uppercase tracking-widest">Saldo Proyectado 30d</span>
@@ -422,6 +496,15 @@ function Grafico({ filas }: { filas: { periodo_inicio: string; ingresos: number;
   );
 }
 
+type FilaSaldo = { tipo: string; nombre: string; detalle: string; importe: number };
+
+const colsSaldo: ColumnaDetalle<FilaSaldo>[] = [
+  { titulo: "Tipo", valor: (f) => <span className="text-[10px] font-bold uppercase text-outline">{f.tipo}</span> },
+  { titulo: "Nombre", valor: (f) => <strong className="text-primary">{f.nombre}</strong> },
+  { titulo: "Detalle", valor: (f) => f.detalle },
+  { titulo: "Importe ARS", valor: (f) => money(f.importe), alinear: "right" },
+];
+
 function KpiCard({
   title,
   value,
@@ -430,6 +513,7 @@ function KpiCard({
   subtitle,
   stats,
   statsColor = "text-secondary",
+  onClick,
 }: {
   title: string;
   value: string;
@@ -438,9 +522,17 @@ function KpiCard({
   subtitle: string;
   stats: string;
   statsColor?: string;
+  onClick?: () => void;
 }) {
   return (
-    <div className="bg-surface-container-lowest border border-outline-variant/20 p-6 rounded-xl shadow-sm flex flex-col justify-between relative overflow-hidden group hover:border-secondary/30 transition-colors">
+    <div
+      onClick={onClick}
+      title={onClick ? "Ver detalle" : undefined}
+      className={cn(
+        "bg-surface-container-lowest border border-outline-variant/20 p-6 rounded-xl shadow-sm flex flex-col justify-between relative overflow-hidden group hover:border-secondary/30 transition-all",
+        onClick && tarjetaClickeable,
+      )}
+    >
       <div className="flex items-center justify-between mb-4">
         <span className="text-[10px] font-bold text-outline uppercase tracking-widest">{title}</span>
         {tag && <span className={cn("px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider", tagColor)}>{tag}</span>}
