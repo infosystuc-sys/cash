@@ -13,6 +13,7 @@ import {
   CreditCard,
   Trash2,
   Plus,
+  Pencil,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
@@ -60,6 +61,7 @@ function rangoPeriodo(p: Periodo): [string | null, string | null] {
 export default function Ingresos() {
   const [params, setParams] = useSearchParams();
   const [nuevo, setNuevo] = useState(params.get("nuevo") === "1");
+  const [editando, setEditando] = useState<Ingreso | null>(null);
   const [cobrar, setCobrar] = useState<{ ingreso: Ingreso; vencimiento?: Vencimiento } | null>(null);
   const [expandido, setExpandido] = useState<number | null>(null);
 
@@ -306,6 +308,7 @@ export default function Ingresos() {
                       onToggle={() => setExpandido(expandido === i.id ? null : i.id!)}
                       onCobrar={() => setCobrar({ ingreso: i })}
                       onEliminar={() => eliminar(i)}
+                      onEditar={() => setEditando(i)}
                     />
                     {expandido === i.id && (
                       <VencimientosDetalle ingreso={i} onCobrar={(v) => setCobrar({ ingreso: i, vencimiento: v })} />
@@ -325,11 +328,23 @@ export default function Ingresos() {
       </div>
 
       {nuevo && catalogos.data && (
-        <NuevoIngresoModal
+        <IngresoModal
           catalogos={catalogos.data}
           onClose={() => setNuevo(false)}
           onSaved={() => {
             setNuevo(false);
+            reload();
+          }}
+        />
+      )}
+      {editando && catalogos.data && (
+        <EditarIngresoModal
+          ingreso={editando}
+          catalogos={catalogos.data}
+          onClose={() => setEditando(null)}
+          onSaved={() => {
+            setEditando(null);
+            setExpandido(null);
             reload();
           }}
         />
@@ -410,12 +425,14 @@ function InvoiceRow({
   onToggle,
   onCobrar,
   onEliminar,
+  onEditar,
 }: {
   ingreso: Ingreso;
   expandido: boolean;
   onToggle: () => void;
   onCobrar: () => void;
   onEliminar: () => void;
+  onEditar: () => void;
 }) {
   const isError = i.estado === "vencido";
   const moneda = i.moneda as Moneda;
@@ -495,6 +512,9 @@ function InvoiceRow({
               <CreditCard className="w-4 h-4" />
             </button>
           )}
+          <button onClick={onEditar} title="Editar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors">
+            <Pencil className="w-4 h-4" />
+          </button>
           <button onClick={onToggle} title="Ver vencimientos" className="p-1.5 rounded-lg text-outline hover:text-primary hover:bg-surface-container-high transition-colors">
             <ChevronDown className={cn("w-4 h-4 transition-transform", expandido && "rotate-180")} />
           </button>
@@ -585,30 +605,75 @@ function VencimientosDetalle({ ingreso, onCobrar }: { ingreso: Ingreso; onCobrar
 }
 
 // ---------------------------------------------------------------------------
-// Nuevo ingreso
+// Alta / edición de ingreso
 // ---------------------------------------------------------------------------
 
-type VencForm = { fecha: string; importe: number; medio: string; cuentaId: string };
+/** id y cobrado solo aplican a vencimientos existentes (edición). */
+type VencForm = { id?: number; cobrado: number; fecha: string; importe: number; medio: string; cuentaId: string };
 
-function NuevoIngresoModal({
+type Catalogos = {
+  clientes: { id: number; razon_social: string; cuit: string | null; tipo_ingreso_id: number | null }[];
+  tipos: { id: number; nombre: string }[];
+  cuentas: Cuenta[];
+};
+
+/** Carga los vencimientos del ingreso y abre el formulario en modo edición. */
+function EditarIngresoModal({ ingreso, catalogos, onClose, onSaved }: { ingreso: Ingreso; catalogos: Catalogos; onClose: () => void; onSaved: () => void }) {
+  const { data, error } = useData(
+    async () => check(await supabase.from("v_ingreso_vencimientos").select("*").eq("ingreso_id", ingreso.id!).order("numero")),
+    [ingreso.id],
+  );
+  if (error) {
+    return (
+      <Modal title="Editar Ingreso" onClose={onClose}>
+        <ErrorBanner message={error} />
+      </Modal>
+    );
+  }
+  if (!data) return null;
+  return <IngresoModal catalogos={catalogos} existente={{ ingreso, vencimientos: data }} onClose={onClose} onSaved={onSaved} />;
+}
+
+function IngresoModal({
   catalogos,
+  existente,
   onClose,
   onSaved,
 }: {
-  catalogos: { clientes: { id: number; razon_social: string; cuit: string | null; tipo_ingreso_id: number | null }[]; tipos: { id: number; nombre: string }[]; cuentas: Cuenta[] };
+  catalogos: Catalogos;
+  existente?: { ingreso: Ingreso; vencimientos: Vencimiento[] };
   onClose: () => void;
   onSaved: () => void;
 }) {
   const hoy = hoyISO();
-  const [clienteId, setClienteId] = useState(String(catalogos.clientes[0]?.id ?? ""));
-  const [tipoId, setTipoId] = useState(String(catalogos.clientes[0]?.tipo_ingreso_id ?? catalogos.tipos[0]?.id ?? ""));
-  const [fechaFactura, setFechaFactura] = useState(hoy);
-  const [moneda, setMoneda] = useState<Moneda>("ARS");
-  const [descripcion, setDescripcion] = useState("");
-  const [comprobante, setComprobante] = useState("");
-  const [total, setTotal] = useState(NaN);
-  const [vencs, setVencs] = useState<VencForm[]>([{ fecha: sumarDias(hoy, 15), importe: NaN, medio: "Transferencia", cuentaId: "" }]);
+  const ing = existente?.ingreso;
+  const [clienteId, setClienteId] = useState(String(ing?.cliente_id ?? catalogos.clientes[0]?.id ?? ""));
+  const [tipoId, setTipoId] = useState(String(ing?.tipo_ingreso_id ?? catalogos.clientes[0]?.tipo_ingreso_id ?? catalogos.tipos[0]?.id ?? ""));
+  const [fechaFactura, setFechaFactura] = useState(ing?.fecha_factura ?? hoy);
+  const [moneda, setMoneda] = useState<Moneda>((ing?.moneda as Moneda) ?? "ARS");
+  const [descripcion, setDescripcion] = useState(ing?.descripcion ?? "");
+  const [comprobante, setComprobante] = useState(ing?.comprobante ?? "");
+  const [total, setTotal] = useState(ing?.importe_total ?? NaN);
+  const [vencs, setVencs] = useState<VencForm[]>(
+    existente
+      ? existente.vencimientos.map((v) => ({
+          id: v.id!,
+          cobrado: v.cobrado ?? 0,
+          fecha: v.fecha_vencimiento!,
+          importe: v.importe!,
+          medio: v.medio_previsto ?? "Transferencia",
+          cuentaId: v.cuenta_prevista_id ? String(v.cuenta_prevista_id) : "",
+        }))
+      : [{ cobrado: 0, fecha: sumarDias(hoy, 15), importe: NaN, medio: "Transferencia", cuentaId: "" }],
+  );
   const { saving, error, setError, run } = useSubmit();
+  const tieneCobros = (ing?.cobrado ?? 0) > 0;
+
+  // El cliente actual puede estar inactivo: se agrega a las opciones para no perderlo
+  const clientes =
+    ing && !catalogos.clientes.some((c) => c.id === ing.cliente_id)
+      ? [...catalogos.clientes, { id: ing.cliente_id!, razon_social: `${ing.cliente} (inactivo)`, cuit: ing.cliente_cuit, tipo_ingreso_id: null }]
+      : catalogos.clientes;
 
   const asignado = vencs.reduce((s, v) => s + (Number.isFinite(v.importe) ? v.importe : 0), 0);
   const diferencia = Math.round(((Number.isFinite(total) ? total : 0) - asignado) * 100) / 100;
@@ -624,6 +689,8 @@ function NuevoIngresoModal({
     const cuota = Math.floor((total / n) * 100) / 100;
     setVencs((vs) =>
       Array.from({ length: n }, (_, k) => ({
+        id: vs[k]?.id,
+        cobrado: vs[k]?.cobrado ?? 0,
         fecha: vs[k]?.fecha ?? sumarMeses(vs[0]?.fecha ?? hoy, k),
         medio: vs[k]?.medio ?? "Transferencia",
         cuentaId: vs[k]?.cuentaId ?? "",
@@ -641,23 +708,26 @@ function NuevoIngresoModal({
       if (!(total > 0)) return setError("Ingresá el importe total");
       if (vencs.some((v) => !v.fecha || !(v.importe > 0))) return setError("Completá fecha e importe de cada vencimiento");
       if (diferencia !== 0) return setError("La suma de vencimientos debe ser igual al total");
-      check(
-        await supabase.rpc("crear_ingreso", {
-          p_cliente_id: Number(clienteId),
-          p_tipo_ingreso_id: Number(tipoId),
-          p_fecha_factura: fechaFactura,
-          p_descripcion: descripcion.trim(),
-          p_moneda: moneda,
-          p_importe_total: total,
-          p_comprobante: comprobante.trim() || undefined,
-          p_vencimientos: vencs.map((v) => ({
-            fecha_vencimiento: v.fecha,
-            importe: v.importe,
-            medio_previsto: v.medio || null,
-            cuenta_prevista_id: v.cuentaId ? Number(v.cuentaId) : null,
-          })),
-        }),
-      );
+      const bajo = vencs.findIndex((v) => v.importe < v.cobrado);
+      if (bajo >= 0) return setError(`El vencimiento #${bajo + 1} no puede ser menor a lo ya cobrado (${money(vencs[bajo].cobrado, moneda)})`);
+      const args = {
+        p_cliente_id: Number(clienteId),
+        p_tipo_ingreso_id: Number(tipoId),
+        p_fecha_factura: fechaFactura,
+        p_descripcion: descripcion.trim(),
+        p_moneda: moneda,
+        p_importe_total: total,
+        p_comprobante: comprobante.trim() || undefined,
+        p_vencimientos: vencs.map((v) => ({
+          id: v.id ?? null,
+          fecha_vencimiento: v.fecha,
+          importe: v.importe,
+          medio_previsto: v.medio || null,
+          cuenta_prevista_id: v.cuentaId ? Number(v.cuentaId) : null,
+        })),
+      };
+      if (ing) check(await supabase.rpc("actualizar_ingreso", { p_id: ing.id!, ...args }));
+      else check(await supabase.rpc("crear_ingreso", args));
       onSaved();
     });
 
@@ -665,8 +735,8 @@ function NuevoIngresoModal({
 
   return (
     <Modal
-      title="Nuevo Ingreso Facturado"
-      subtitle="Emisión de factura y programación de vencimientos asociados"
+      title={ing ? "Editar Ingreso" : "Nuevo Ingreso Facturado"}
+      subtitle={ing ? `${ing.cliente} • ${ing.descripcion}` : "Emisión de factura y programación de vencimientos asociados"}
       icon={<Receipt className="w-6 h-6" />}
       onClose={onClose}
       size="max-w-3xl"
@@ -675,7 +745,7 @@ function NuevoIngresoModal({
           <CancelButton onClick={onClose} />
           <SubmitButton onClick={guardar} saving={saving}>
             <CheckCircle className="w-4 h-4" />
-            Guardar Ingreso y Vencimientos
+            {ing ? "Guardar Cambios" : "Guardar Ingreso y Vencimientos"}
           </SubmitButton>
         </>
       }
@@ -690,13 +760,15 @@ function NuevoIngresoModal({
             <select
               className={selectCls}
               value={clienteId}
+              disabled={tieneCobros}
+              title={tieneCobros ? "No se puede cambiar: el ingreso tiene cobros" : undefined}
               onChange={(e) => {
                 setClienteId(e.target.value);
                 const c = catalogos.clientes.find((x) => String(x.id) === e.target.value);
                 if (c?.tipo_ingreso_id) setTipoId(String(c.tipo_ingreso_id));
               }}
             >
-              {catalogos.clientes.map((c) => (
+              {clientes.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.razon_social}
                   {c.cuit && ` (CUIT ${c.cuit})`}
@@ -720,7 +792,7 @@ function NuevoIngresoModal({
             <div className="flex items-center gap-6 h-10">
               {(["ARS", "USD"] as Moneda[]).map((m) => (
                 <label key={m} className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="currency" checked={moneda === m} onChange={() => setMoneda(m)} className="text-secondary focus:ring-0 w-4 h-4" />
+                  <input type="radio" name="currency" checked={moneda === m} disabled={tieneCobros} onChange={() => setMoneda(m)} className="text-secondary focus:ring-0 w-4 h-4" />
                   <span className="text-xs font-bold text-on-surface">{m === "ARS" ? "Pesos (ARS)" : "Dólares (USD)"}</span>
                 </label>
               ))}
@@ -765,7 +837,10 @@ function NuevoIngresoModal({
               <span className="w-8 h-8 rounded-lg bg-surface-container-high flex items-center justify-center text-[10px] font-bold text-outline">#{k + 1}</span>
               <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <input type="date" className={cn(inputCls, "h-9 text-[11px] font-bold")} value={v.fecha} onChange={(e) => setVenc(k, { fecha: e.target.value })} />
-                <MoneyInput value={v.importe} onChange={(n) => setVenc(k, { importe: n })} prefix={prefijo} inputClassName="h-9 text-[11px]" />
+                <div>
+                  <MoneyInput value={v.importe} onChange={(n) => setVenc(k, { importe: n })} prefix={prefijo} inputClassName="h-9 text-[11px]" />
+                  {v.cobrado > 0 && <span className="text-[9px] font-bold text-on-tertiary-container">Cobrado {money(v.cobrado, moneda)}</span>}
+                </div>
                 <select
                   className={cn(selectCls, "h-9 text-[11px] font-bold")}
                   value={v.cuentaId ? `c${v.cuentaId}` : v.medio}
@@ -791,7 +866,8 @@ function NuevoIngresoModal({
                 </span>
                 <button
                   type="button"
-                  disabled={vencs.length === 1}
+                  disabled={vencs.length === 1 || v.cobrado > 0}
+                  title={v.cobrado > 0 ? "Tiene cobros: no se puede eliminar" : undefined}
                   onClick={() => setVencs((vs) => vs.filter((_, j) => j !== k))}
                   className="p-1.5 text-outline hover:text-error transition-colors rounded-lg hover:bg-error/5 disabled:opacity-30"
                 >
@@ -808,7 +884,7 @@ function NuevoIngresoModal({
               type="button"
               disabled={vencs.length >= 12}
               onClick={() =>
-                setVencs((vs) => [...vs, { fecha: sumarMeses(vs[vs.length - 1]?.fecha ?? hoy, 1), importe: Math.max(diferencia, 0) || NaN, medio: "Transferencia", cuentaId: "" }])
+                setVencs((vs) => [...vs, { cobrado: 0, fecha: sumarMeses(vs[vs.length - 1]?.fecha ?? hoy, 1), importe: Math.max(diferencia, 0) || NaN, medio: "Transferencia", cuentaId: "" }])
               }
               className="flex items-center gap-1.5 px-4 py-2 text-[11px] font-bold text-secondary hover:bg-secondary/5 rounded-lg transition-colors disabled:opacity-40"
             >

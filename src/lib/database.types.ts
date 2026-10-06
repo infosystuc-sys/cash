@@ -1323,6 +1323,20 @@ export type Database = {
       }
     }
     Functions: {
+      actualizar_ingreso: {
+        Args: {
+          p_cliente_id: number
+          p_comprobante?: string
+          p_descripcion: string
+          p_fecha_factura: string
+          p_id: number
+          p_importe_total: number
+          p_moneda: Database["public"]["Enums"]["moneda"]
+          p_tipo_ingreso_id: number
+          p_vencimientos: Json
+        }
+        Returns: undefined
+      }
       convertir: {
         Args: {
           p_a: Database["public"]["Enums"]["moneda"]
