@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Search, PlusCircle, Truck, Pencil, Power } from "lucide-react";
+import { Search, PlusCircle, Truck, Pencil, Power, Trash2 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
 import { useData } from "./lib/useData";
@@ -12,8 +12,20 @@ export default function Proveedores() {
   const [editando, setEditando] = useState<Proveedor | "nuevo" | null>(null);
 
   const { data, loading, error, reload } = useData(async () =>
-    check(await supabase.from("proveedores").select("*").order("razon_social")),
+    check(await supabase.from("proveedores").select("*, deudas(count), egresos(count), cheques(count)").order("razon_social")),
   );
+
+  // Deudas, egresos o cheques endosados a este proveedor
+  const tieneMovimientos = (p: NonNullable<typeof data>[number]) =>
+    (p.deudas[0]?.count ?? 0) + (p.egresos[0]?.count ?? 0) + (p.cheques[0]?.count ?? 0) > 0;
+
+  async function eliminar(p: Proveedor) {
+    if (!confirm(`¿Eliminar el proveedor "${p.razon_social}"? Esta acción no se puede deshacer.`)) return;
+    const { error } = await supabase.from("proveedores").delete().eq("id", p.id);
+    // La FK impide borrar si apareció un movimiento entre la carga de la lista y el borrado
+    if (error) alert(error.code === "23503" ? "No se puede eliminar: el proveedor tiene movimientos. Podés desactivarlo." : error.message);
+    reload();
+  }
 
   const filtrados = useMemo(() => {
     const q = busqueda.toLowerCase().trim();
@@ -99,6 +111,11 @@ export default function Proveedores() {
                       <button onClick={() => toggleActivo(p)} title={p.activo ? "Desactivar" : "Activar"} className="p-1.5 rounded-lg text-outline hover:text-primary transition-colors">
                         <Power className="w-4 h-4" />
                       </button>
+                      {!tieneMovimientos(p) && (
+                        <button onClick={() => eliminar(p)} title="Eliminar (sin movimientos)" className="p-1.5 rounded-lg text-outline hover:text-error transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
