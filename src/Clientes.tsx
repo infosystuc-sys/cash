@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Search, PlusCircle, Building2, Pencil, Power } from "lucide-react";
+import { Search, PlusCircle, Building2, Pencil, Power, Trash2 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check } from "./lib/supabase";
 import { useData } from "./lib/useData";
@@ -12,7 +12,12 @@ type Cliente = {
   tipo_ingreso_id: number | null;
   activo: boolean;
   tipos_ingreso: { nombre: string } | null;
+  ingresos: { count: number }[];
+  cheques: { count: number }[];
+  cobros: { count: number }[];
 };
+
+const tieneMovimientos = (c: Cliente) => (c.ingresos[0]?.count ?? 0) + (c.cheques[0]?.count ?? 0) + (c.cobros[0]?.count ?? 0) > 0;
 
 export default function Clientes() {
   const [busqueda, setBusqueda] = useState("");
@@ -20,10 +25,13 @@ export default function Clientes() {
 
   const { data, loading, error, reload } = useData(async () => {
     const [clientes, tipos] = await Promise.all([
-      supabase.from("clientes").select("id, razon_social, cuit, tipo_ingreso_id, activo, tipos_ingreso(nombre)").order("razon_social"),
+      supabase
+        .from("clientes")
+        .select("id, razon_social, cuit, tipo_ingreso_id, activo, tipos_ingreso(nombre), ingresos(count), cheques(count), cobros(count)")
+        .order("razon_social"),
       supabase.from("tipos_ingreso").select("id, nombre").eq("activo", true).order("nombre"),
     ]);
-    return { clientes: check(clientes) as Cliente[], tipos: check(tipos) };
+    return { clientes: check(clientes) as unknown as Cliente[], tipos: check(tipos) };
   });
 
   const filtrados = useMemo(() => {
@@ -35,6 +43,14 @@ export default function Clientes() {
 
   async function toggleActivo(c: Cliente) {
     await supabase.from("clientes").update({ activo: !c.activo }).eq("id", c.id);
+    reload();
+  }
+
+  async function eliminar(c: Cliente) {
+    if (!confirm(`¿Eliminar el cliente "${c.razon_social}"? Esta acción no se puede deshacer.`)) return;
+    const { error } = await supabase.from("clientes").delete().eq("id", c.id);
+    // La FK impide borrar si apareció un movimiento entre la carga de la lista y el borrado
+    if (error) alert(error.code === "23503" ? "No se puede eliminar: el cliente tiene movimientos. Podés desactivarlo." : error.message);
     reload();
   }
 
@@ -120,6 +136,11 @@ export default function Clientes() {
                       <button onClick={() => toggleActivo(client)} title={client.activo ? "Desactivar" : "Activar"} className="p-1.5 rounded-lg text-outline hover:text-primary transition-colors">
                         <Power className="w-4 h-4" />
                       </button>
+                      {!tieneMovimientos(client) && (
+                        <button onClick={() => eliminar(client)} title="Eliminar (sin movimientos)" className="p-1.5 rounded-lg text-outline hover:text-error transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

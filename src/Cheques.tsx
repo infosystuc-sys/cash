@@ -13,6 +13,7 @@ import {
   Landmark,
   Ban,
   Info,
+  Pencil,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
@@ -48,7 +49,7 @@ export default function Cheques() {
   const [tab, setTab] = useState<Tab>("en_cartera");
   const [proximos, setProximos] = useState(false);
   const [busqueda, setBusqueda] = useState("");
-  const [accion, setAccion] = useState<{ tipo: "endosar" | "depositar" | "rechazar"; cheque: Cheque } | null>(null);
+  const [accion, setAccion] = useState<{ tipo: "endosar" | "depositar" | "rechazar" | "editar"; cheque: Cheque } | null>(null);
   const [cargar, setCargar] = useState(false);
 
   const { data, loading, error, reload } = useData(async () =>
@@ -226,6 +227,7 @@ export default function Cheques() {
                     onEndosar={() => setAccion({ tipo: "endosar", cheque: c })}
                     onDepositar={() => setAccion({ tipo: "depositar", cheque: c })}
                     onRechazar={() => setAccion({ tipo: "rechazar", cheque: c })}
+                    onEditar={() => setAccion({ tipo: "editar", cheque: c })}
                   />
                 ))}
               </tbody>
@@ -242,6 +244,7 @@ export default function Cheques() {
 
       {accion?.tipo === "endosar" && <EndosoModal cheque={accion.cheque} onClose={() => setAccion(null)} onSaved={() => (setAccion(null), reload())} />}
       {accion?.tipo === "depositar" && <DepositoModal cheque={accion.cheque} onClose={() => setAccion(null)} onSaved={() => (setAccion(null), reload())} />}
+      {accion?.tipo === "editar" && <EditarChequeModal cheque={accion.cheque} onClose={() => setAccion(null)} onSaved={() => (setAccion(null), reload())} />}
       {accion?.tipo === "rechazar" && <RechazoModal cheque={accion.cheque} onClose={() => setAccion(null)} onSaved={() => (setAccion(null), reload())} />}
       {cargar && <CargarChequeModal onClose={() => setCargar(false)} onSaved={() => (setCargar(false), reload())} />}
     </div>
@@ -326,11 +329,13 @@ function CheckRow({
   onEndosar,
   onDepositar,
   onRechazar,
+  onEditar,
 }: {
   cheque: Cheque;
   onEndosar: () => void;
   onDepositar: () => void;
   onRechazar: () => void;
+  onEditar: () => void;
 }) {
   const enCartera = c.estado === "en_cartera";
   const isUrgent = enCartera && (c.dias_para_pago ?? 99) <= 7;
@@ -407,6 +412,9 @@ function CheckRow({
       </td>
       <td className="px-6 py-4 text-right">
         <div className="flex items-center justify-end gap-2">
+          <button onClick={onEditar} title="Editar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors">
+            <Pencil className="w-4 h-4" />
+          </button>
           {enCartera && (
             <>
               <button
@@ -824,6 +832,133 @@ function CargarChequeModal({ onClose, onSaved }: { onClose: () => void; onSaved:
           <input className={inputCls} value={f.librador} onChange={(e) => setF({ ...f, librador: e.target.value })} placeholder={cliente?.razon_social} />
         </FormGroup>
       </div>
+      <ErrorBanner message={error} />
+    </Modal>
+  );
+}
+
+/** Corrige los datos del cheque. Importe y cliente solo si está en cartera y no vino de un cobro. */
+function EditarChequeModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: () => void; onSaved: () => void }) {
+  const importeEditable = cheque.estado === "en_cartera" && !cheque.cobro_id;
+  const { data: clientes } = useData(async () =>
+    check(
+      await supabase
+        .from("clientes")
+        .select("id, razon_social")
+        .or(cheque.cliente_id ? `activo.eq.true,id.eq.${cheque.cliente_id}` : "activo.eq.true")
+        .order("razon_social"),
+    ),
+  );
+  const [f, setF] = useState({
+    banco_emisor: cheque.banco_emisor ?? "",
+    numero: cheque.numero ?? "",
+    tipo: (cheque.tipo ?? "echeq") as "echeq" | "fisico",
+    fecha_emision: cheque.fecha_emision ?? "",
+    fecha_pago: cheque.fecha_pago ?? "",
+    librador: cheque.librador ?? "",
+    librador_cuit: cheque.librador_cuit ?? "",
+    notas: cheque.notas ?? "",
+  });
+  const [importe, setImporte] = useState(cheque.importe ?? NaN);
+  const [clienteId, setClienteId] = useState(cheque.cliente_id ? String(cheque.cliente_id) : "");
+  const { saving, error, setError, run } = useSubmit();
+
+  const guardar = () =>
+    run(async () => {
+      if (!f.banco_emisor.trim() || !f.numero.trim() || !f.fecha_pago) return setError("Banco, número y fecha de pago son obligatorios");
+      if (importeEditable && !(importe > 0)) return setError("Ingresá un importe válido");
+      check(
+        await supabase
+          .from("cheques")
+          .update({
+            banco_emisor: f.banco_emisor.trim(),
+            numero: f.numero.trim(),
+            tipo: f.tipo,
+            fecha_emision: f.fecha_emision || null,
+            fecha_pago: f.fecha_pago,
+            librador: f.librador.trim() || null,
+            librador_cuit: f.librador_cuit.trim() || null,
+            notas: f.notas.trim() || null,
+            ...(importeEditable ? { importe, cliente_id: clienteId ? Number(clienteId) : null } : {}),
+          })
+          .eq("id", cheque.id!),
+      );
+      onSaved();
+    });
+
+  const motivoBloqueo = cheque.cobro_id
+    ? "viene del cobro de una factura"
+    : `está ${ESTADO_LABEL[cheque.estado ?? ""]?.toLowerCase()}`;
+
+  return (
+    <Modal
+      title={`Editar Cheque #${cheque.numero}`}
+      subtitle={`${cheque.banco_emisor} • ${ESTADO_LABEL[cheque.estado ?? ""]}`}
+      icon={<Receipt className="w-6 h-6" />}
+      onClose={onClose}
+      footer={
+        <>
+          <CancelButton onClick={onClose} />
+          <SubmitButton onClick={guardar} saving={saving}>
+            <CheckCircle className="w-4 h-4" />
+            Guardar Cambios
+          </SubmitButton>
+        </>
+      }
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <FormGroup label="Banco emisor *">
+          <input className={inputCls} value={f.banco_emisor} onChange={(e) => setF({ ...f, banco_emisor: e.target.value })} />
+        </FormGroup>
+        <FormGroup label="Número *">
+          <input className={inputCls} value={f.numero} onChange={(e) => setF({ ...f, numero: e.target.value })} />
+        </FormGroup>
+        <FormGroup label="Tipo">
+          <select className={selectCls} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as "echeq" | "fisico" })}>
+            <option value="echeq">eCheq</option>
+            <option value="fisico">Cheque físico</option>
+          </select>
+        </FormGroup>
+        <FormGroup label="Fecha de emisión">
+          <input type="date" className={inputCls} value={f.fecha_emision} onChange={(e) => setF({ ...f, fecha_emision: e.target.value })} />
+        </FormGroup>
+        <FormGroup label="Fecha de pago *">
+          <input type="date" className={inputCls} value={f.fecha_pago} onChange={(e) => setF({ ...f, fecha_pago: e.target.value })} />
+        </FormGroup>
+        <FormGroup label="Importe">
+          {importeEditable ? (
+            <MoneyInput value={importe} onChange={setImporte} />
+          ) : (
+            <div className="h-10 px-3 rounded-lg bg-surface-container-low/50 flex items-center justify-end text-xs font-bold font-numeric text-on-surface-variant" title={`No editable: el cheque ${motivoBloqueo}`}>
+              {money(cheque.importe)}
+            </div>
+          )}
+        </FormGroup>
+        <FormGroup label="Cliente">
+          <select className={selectCls} value={clienteId} onChange={(e) => setClienteId(e.target.value)} disabled={!importeEditable}>
+            <option value="">Sin cliente</option>
+            {clientes?.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.razon_social}
+              </option>
+            ))}
+          </select>
+        </FormGroup>
+        <FormGroup label="Librador">
+          <input className={inputCls} value={f.librador} onChange={(e) => setF({ ...f, librador: e.target.value })} />
+        </FormGroup>
+        <FormGroup label="CUIT librador">
+          <input className={inputCls} value={f.librador_cuit} onChange={(e) => setF({ ...f, librador_cuit: e.target.value })} />
+        </FormGroup>
+        <FormGroup label="Notas">
+          <input className={inputCls} value={f.notas} onChange={(e) => setF({ ...f, notas: e.target.value })} />
+        </FormGroup>
+      </div>
+      {!importeEditable && (
+        <p className="text-[11px] text-on-surface-variant">
+          Importe y cliente no se pueden cambiar porque el cheque {motivoBloqueo}.
+        </p>
+      )}
       <ErrorBanner message={error} />
     </Modal>
   );
