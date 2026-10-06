@@ -22,6 +22,7 @@ import { useData } from "./lib/useData";
 import { exportCsv } from "./lib/csv";
 import { fecha, hoyISO, iniciales, money, sumarDias, textoVencimiento } from "./lib/format";
 import { ProveedorModal } from "./Proveedores";
+import { ClienteModal } from "./Clientes";
 import {
   CancelButton,
   EmptyRow,
@@ -729,8 +730,8 @@ function RechazoModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: (
 
 /** Carga un cheque recibido: aplicado a una factura pendiente (registra el cobro) o suelto. */
 function CargarChequeModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const { data: cat } = useData(async () => {
-    const [clientes, venc] = await Promise.all([
+  const { data: cat, reload } = useData(async () => {
+    const [clientes, venc, tipos] = await Promise.all([
       supabase.from("clientes").select("id, razon_social, cuit").eq("activo", true).order("razon_social"),
       supabase
         .from("v_ingreso_vencimientos")
@@ -738,11 +739,13 @@ function CargarChequeModal({ onClose, onSaved }: { onClose: () => void; onSaved:
         .gt("saldo", 0)
         .eq("moneda", "ARS")
         .order("fecha_vencimiento"),
+      supabase.from("tipos_ingreso").select("id, nombre").eq("activo", true).order("nombre"),
     ]);
-    return { clientes: check(clientes), venc: check(venc) };
+    return { clientes: check(clientes), venc: check(venc), tipos: check(tipos) };
   });
 
   const [clienteId, setClienteId] = useState("");
+  const [nuevoCliente, setNuevoCliente] = useState(false);
   const [vencId, setVencId] = useState("");
   const [importe, setImporte] = useState(NaN);
   const [f, setF] = useState({ banco_emisor: "", numero: "", tipo: "echeq" as "echeq" | "fisico", fecha_pago: sumarDias(hoyISO(), 30), librador: "", librador_cuit: "" });
@@ -796,11 +799,12 @@ function CargarChequeModal({ onClose, onSaved }: { onClose: () => void; onSaved:
       }
     >
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-        <FormGroup label="Cliente *">
+        <FormGroup label="Cliente *" onNuevo={() => setNuevoCliente(true)}>
           <select
             className={selectCls}
             value={clienteId}
             onChange={(e) => {
+              if (e.target.value === "nuevo") return setNuevoCliente(true);
               setClienteId(e.target.value);
               setVencId("");
             }}
@@ -811,6 +815,7 @@ function CargarChequeModal({ onClose, onSaved }: { onClose: () => void; onSaved:
                 {c.razon_social}
               </option>
             ))}
+            <option value="nuevo">+ Nuevo cliente…</option>
           </select>
         </FormGroup>
         <FormGroup label="Aplicar a factura pendiente">
@@ -855,6 +860,19 @@ function CargarChequeModal({ onClose, onSaved }: { onClose: () => void; onSaved:
         </FormGroup>
       </div>
       <ErrorBanner message={error} />
+      {nuevoCliente && cat && (
+        <ClienteModal
+          cliente={null}
+          tipos={cat.tipos}
+          onClose={() => setNuevoCliente(false)}
+          onSaved={(c) => {
+            setNuevoCliente(false);
+            reload();
+            setClienteId(String(c.id));
+            setVencId("");
+          }}
+        />
+      )}
     </Modal>
   );
 }
