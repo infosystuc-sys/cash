@@ -1394,6 +1394,7 @@ export type Database = {
         Args: { p_cheque_id: number; p_cuenta_id: number; p_fecha: string }
         Returns: undefined
       }
+      eliminar_cheque: { Args: { p_cheque_id: number }; Returns: undefined }
       endosar_cheque: {
         Args: {
           p_categoria_egreso_id: number

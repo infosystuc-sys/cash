@@ -95,6 +95,14 @@ export default function Deudas() {
     });
   }, [data, busqueda, filtro]);
 
+  async function eliminar(d: Deuda) {
+    if (!confirm(`¿Eliminar la deuda ${codigoDeuda(d.id)} (${d.proveedor} • ${d.concepto}) y su plan de cuotas?`)) return;
+    const { error } = await supabase.from("deudas").delete().eq("id", d.id!);
+    // La FK de egresos impide borrar si se registró un pago entre la carga de la lista y el borrado
+    if (error) alert(error.code === "23503" ? "No se puede eliminar: la deuda tiene pagos registrados." : error.message);
+    reload();
+  }
+
   if (seleccionada) {
     return <DebtDetail deudaId={seleccionada} onBack={() => (setSeleccionada(null), reload())} />;
   }
@@ -269,8 +277,19 @@ export default function Deudas() {
                           {(d.cuotas_total ?? 0) > 1 && ` (${d.cuotas_pagadas}/${d.cuotas_total})`}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        <span className="text-secondary inline-block group-hover:translate-x-1 transition-transform">
+                      <td className="px-6 py-4 text-right whitespace-nowrap">
+                        <button
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            eliminar(d);
+                          }}
+                          disabled={(d.pagado ?? 0) > 0}
+                          title={(d.pagado ?? 0) > 0 ? "No se puede eliminar: tiene pagos registrados" : "Eliminar"}
+                          className="p-1.5 mr-2 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors disabled:opacity-30 disabled:hover:text-outline disabled:hover:bg-transparent disabled:cursor-not-allowed align-middle"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                        <span className="text-secondary inline-block group-hover:translate-x-1 transition-transform align-middle">
                           <ArrowRight className="w-4 h-4" />
                         </span>
                       </td>

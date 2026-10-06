@@ -14,6 +14,7 @@ import {
   Ban,
   Info,
   Pencil,
+  Trash2,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
@@ -73,6 +74,16 @@ export default function Cheques() {
   }, [cheques, tab, proximos, busqueda]);
 
   const count = (e: Tab) => (e === "todos" ? cheques.length : cheques.filter((c) => c.estado === e).length);
+
+  async function eliminar(c: Cheque) {
+    const aviso = c.cobro_id
+      ? `¿Eliminar el cheque #${c.numero}? También se elimina el cobro asociado y la factura vuelve a quedar pendiente por ${money(c.importe)}.`
+      : `¿Eliminar el cheque #${c.numero} por ${money(c.importe)}?`;
+    if (!confirm(aviso)) return;
+    const { error } = await supabase.rpc("eliminar_cheque", { p_cheque_id: c.id! });
+    if (error) alert(error.message);
+    reload();
+  }
 
   return (
     <div className="flex flex-col gap-8">
@@ -228,6 +239,7 @@ export default function Cheques() {
                     onDepositar={() => setAccion({ tipo: "depositar", cheque: c })}
                     onRechazar={() => setAccion({ tipo: "rechazar", cheque: c })}
                     onEditar={() => setAccion({ tipo: "editar", cheque: c })}
+                    onEliminar={() => eliminar(c)}
                   />
                 ))}
               </tbody>
@@ -330,12 +342,14 @@ function CheckRow({
   onDepositar,
   onRechazar,
   onEditar,
+  onEliminar,
 }: {
   cheque: Cheque;
   onEndosar: () => void;
   onDepositar: () => void;
   onRechazar: () => void;
   onEditar: () => void;
+  onEliminar: () => void;
 }) {
   const enCartera = c.estado === "en_cartera";
   const isUrgent = enCartera && (c.dias_para_pago ?? 99) <= 7;
@@ -414,6 +428,14 @@ function CheckRow({
         <div className="flex items-center justify-end gap-2">
           <button onClick={onEditar} title="Editar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors">
             <Pencil className="w-4 h-4" />
+          </button>
+          <button
+            onClick={onEliminar}
+            disabled={!enCartera}
+            title={enCartera ? "Eliminar" : `No se puede eliminar un cheque ${ESTADO_LABEL[c.estado ?? ""]?.toLowerCase()}`}
+            className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors disabled:opacity-30 disabled:hover:text-outline disabled:hover:bg-transparent disabled:cursor-not-allowed"
+          >
+            <Trash2 className="w-4 h-4" />
           </button>
           {enCartera && (
             <>
