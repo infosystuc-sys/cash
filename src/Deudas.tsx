@@ -931,6 +931,30 @@ export function PagoCuotaModal({
 // Alta / edición de deuda
 // ---------------------------------------------------------------------------
 
+type Frecuencia = "diaria" | "semanal" | "mensual";
+
+const FRECUENCIAS: Record<Frecuencia, { label: string }> = {
+  diaria: { label: "Diaria" },
+  semanal: { label: "Semanal" },
+  mensual: { label: "Mensual" },
+};
+
+/** Fecha de la cuota k (0 = primera) según la frecuencia. */
+function fechaCuota(primera: string, k: number, frecuencia: Frecuencia) {
+  if (frecuencia === "diaria") return sumarDias(primera, k);
+  if (frecuencia === "semanal") return sumarDias(primera, 7 * k);
+  return sumarMeses(primera, k);
+}
+
+/** Infiere la frecuencia de un plan guardado a partir de la distancia entre sus primeras cuotas. */
+function detectarFrecuencia(fechas: string[]): Frecuencia {
+  if (fechas.length < 2) return "mensual";
+  const dias = Math.round((new Date(fechas[1] + "T12:00:00").getTime() - new Date(fechas[0] + "T12:00:00").getTime()) / 86_400_000);
+  if (dias === 1) return "diaria";
+  if (dias === 7) return "semanal";
+  return "mensual";
+}
+
 /** id y pagado solo aplican a cuotas existentes (edición). */
 type CuotaForm = { id?: number; pagado: number; fecha: string; importe: number };
 
@@ -971,6 +995,7 @@ function DeudaModal({
   const [total, setTotal] = useState(deu?.importe_total ?? NaN);
   const [enCuotas, setEnCuotas] = useState(cuotasIniciales.length > 1);
   const [cantidad, setCantidad] = useState(cuotasIniciales.length > 1 ? cuotasIniciales.length : 6);
+  const [frecuencia, setFrecuencia] = useState<Frecuencia>(() => detectarFrecuencia(cuotasIniciales.map((q) => q.fecha)));
   const [primerVto, setPrimerVto] = useState(cuotasIniciales[0]?.fecha ?? sumarDias(hoy, 30));
   const [cuotas, setCuotas] = useState<CuotaForm[]>(cuotasIniciales);
   const [referencia, setReferencia] = useState(deu?.referencia ?? "");
@@ -989,7 +1014,7 @@ function DeudaModal({
       Array.from({ length: n }, (_, k) => ({
         id: prev[k]?.id,
         pagado: prev[k]?.pagado ?? 0,
-        fecha: sumarMeses(primerVto, k),
+        fecha: fechaCuota(primerVto, k, frecuencia),
         importe: k === n - 1 ? Math.round((total - base * (n - 1)) * 100) / 100 : base,
       })),
     );
@@ -1003,7 +1028,7 @@ function DeudaModal({
       return;
     }
     recalcular();
-  }, [total, enCuotas, cantidad, primerVto]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [total, enCuotas, cantidad, primerVto, frecuencia]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cuotas con pagos que quedarían afuera al reducir la cantidad
   const quitadasConPago = cuotasIniciales.filter((q) => q.pagado > 0 && !cuotas.some((c) => c.id === q.id));
@@ -1139,7 +1164,7 @@ function DeudaModal({
         <label className="text-[11px] font-bold text-primary uppercase tracking-wider">Forma de Pago del Pasivo</label>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <PaymentModeOption active={!enCuotas} onClick={() => setEnCuotas(false)} title="Un solo pago" sub="Vencimiento único en fecha" />
-          <PaymentModeOption active={enCuotas} onClick={() => setEnCuotas(true)} title="En cuotas planificadas" sub="Generación automática mensual" />
+          <PaymentModeOption active={enCuotas} onClick={() => setEnCuotas(true)} title="En cuotas planificadas" sub="Plan diario, semanal o mensual" />
         </div>
       </div>
 
@@ -1149,9 +1174,18 @@ function DeudaModal({
             <input type="date" className={inputCls} value={primerVto} onChange={(e) => setPrimerVto(e.target.value)} />
           </FormGroup>
           {enCuotas && (
-            <FormGroup label="Cantidad de cuotas mensuales">
-              <input type="number" min={2} max={120} className={cn(inputCls, "w-28")} value={cantidad} onChange={(e) => setCantidad(Math.max(2, Math.min(120, Number(e.target.value) || 2)))} />
-            </FormGroup>
+            <>
+              <FormGroup label="Frecuencia">
+                <Segmented
+                  value={frecuencia}
+                  onChange={setFrecuencia}
+                  options={(Object.keys(FRECUENCIAS) as Frecuencia[]).map((f) => ({ value: f, label: FRECUENCIAS[f].label }))}
+                />
+              </FormGroup>
+              <FormGroup label="Cantidad de cuotas">
+                <input type="number" min={2} max={120} className={cn(inputCls, "w-28")} value={cantidad} onChange={(e) => setCantidad(Math.max(2, Math.min(120, Number(e.target.value) || 2)))} />
+              </FormGroup>
+            </>
           )}
           <button type="button" onClick={recalcular} className="h-10 px-4 rounded-lg text-[11px] font-bold text-secondary hover:bg-secondary/5">
             Recalcular
