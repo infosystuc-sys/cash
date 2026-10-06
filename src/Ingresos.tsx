@@ -14,6 +14,8 @@ import {
   Trash2,
   Plus,
   Pencil,
+  CalendarClock,
+  CalendarRange,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
@@ -99,6 +101,36 @@ export default function Ingresos() {
 
   const tc = catalogos.data?.tc ?? 0;
   const ars = (i: { moneda: string | null }, v: number | null) => (i.moneda === "USD" ? (v ?? 0) * tc : v ?? 0);
+
+  // Próximos cobros por fecha de vencimiento (independiente del filtro de período): de hoy al domingo y de hoy a fin de mes
+  const hoy = hoyISO();
+  const diaSemana = new Date(hoy + "T12:00:00").getDay(); // 0 = domingo
+  const finSemana = sumarDias(hoy, (7 - diaSemana) % 7);
+  const finMes = sumarDias(sumarMeses(hoy.slice(0, 8) + "01", 1), -1);
+  const proximos = useData(
+    async () =>
+      check(
+        await supabase
+          .from("v_ingreso_vencimientos")
+          .select("id, fecha_vencimiento, saldo, moneda, ingreso_id, ingresos(cliente_id, tipo_ingreso_id)")
+          .gt("saldo", 0)
+          .gte("fecha_vencimiento", hoy)
+          .lte("fecha_vencimiento", finSemana > finMes ? finSemana : finMes),
+      ),
+    [data, hoy], // se recarga junto con el listado (altas, ediciones, cobros)
+  );
+
+  const aCobrar = useMemo(() => {
+    const lista = (proximos.data ?? []).filter(
+      (v) => (!clienteId || String(v.ingresos?.cliente_id) === clienteId) && (!tipoId || String(v.ingresos?.tipo_ingreso_id) === tipoId),
+    );
+    const resumen = (hasta: string) => {
+      const l = lista.filter((v) => v.fecha_vencimiento! <= hasta);
+      return { total: l.reduce((s, v) => s + ars(v, v.saldo), 0), cant: l.length };
+    };
+    return { semana: resumen(finSemana), mes: resumen(finMes) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proximos.data, clienteId, tipoId, tc, finSemana, finMes]);
 
   const base = useMemo(
     () =>
@@ -204,7 +236,7 @@ export default function Ingresos() {
       </div>
 
       {/* KPI Summary Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-6">
         <KpiCard title="Total Facturado Período" value={money(kpi.total)} icon={<Receipt />} tag={`${base.length} comprobantes`} subtitle="en el período" />
         <KpiCard
           title="Cobrado Efectivo"
@@ -216,6 +248,24 @@ export default function Ingresos() {
           subtitle="aplicado a facturas"
         />
         <KpiCard title="Por Cobrar en Término" value={money(kpi.enTermino)} icon={<Calendar />} tag={`${kpi.cantEnTermino} facturas`} subtitle="no vencidas" />
+        <KpiCard
+          title="A Cobrar Esta Semana"
+          value={money(aCobrar.semana.total)}
+          icon={<CalendarClock />}
+          color="text-secondary"
+          tag={`${aCobrar.semana.cant} vencimientos`}
+          tagColor="bg-secondary-fixed text-on-secondary-fixed"
+          subtitle={`hasta el ${fecha(finSemana).slice(0, 5)}`}
+        />
+        <KpiCard
+          title="A Cobrar en el Mes"
+          value={money(aCobrar.mes.total)}
+          icon={<CalendarRange />}
+          color="text-secondary"
+          tag={`${aCobrar.mes.cant} vencimientos`}
+          tagColor="bg-secondary-fixed text-on-secondary-fixed"
+          subtitle={`hasta el ${fecha(finMes).slice(0, 5)}`}
+        />
         <KpiCard
           title="Vencido Impago"
           value={money(kpi.vencido)}
