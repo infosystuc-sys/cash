@@ -165,16 +165,18 @@ export default function Clientes() {
   );
 }
 
-function ClienteModal({
+/** Alta/edición de cliente. Exportado para crear clientes desde otros formularios. */
+export function ClienteModal({
   cliente,
   tipos,
   onClose,
   onSaved,
 }: {
-  cliente: Cliente | null;
+  cliente: Pick<Cliente, "id" | "razon_social" | "cuit" | "tipo_ingreso_id"> | null;
   tipos: { id: number; nombre: string }[];
   onClose: () => void;
-  onSaved: () => void;
+  /** id del cliente y, si se creó uno nuevo en el formulario, el tipo de ingreso creado */
+  onSaved: (cliente: { id: number; razon_social: string; cuit: string | null; tipo_ingreso_id: number | null }, tipoNuevo?: { id: number; nombre: string }) => void;
 }) {
   const [razon, setRazon] = useState(cliente?.razon_social ?? "");
   const [cuit, setCuit] = useState(cliente?.cuit ?? "");
@@ -186,14 +188,17 @@ function ClienteModal({
     run(async () => {
       if (!razon.trim()) return setError("La razón social es obligatoria");
       let tipo: number | null = tipoId && tipoId !== "nuevo" ? Number(tipoId) : null;
+      let tipoNuevo: { id: number; nombre: string } | undefined;
       if (tipoId === "nuevo") {
         if (!nuevoTipo.trim()) return setError("Indicá el nombre de la nueva categoría");
-        tipo = check(await supabase.from("tipos_ingreso").insert({ nombre: nuevoTipo.trim() }).select("id").single()).id;
+        tipoNuevo = check(await supabase.from("tipos_ingreso").insert({ nombre: nuevoTipo.trim() }).select("id, nombre").single());
+        tipo = tipoNuevo.id;
       }
       const fila = { razon_social: razon.trim(), cuit: cuit.trim() || null, tipo_ingreso_id: tipo };
-      if (cliente) check(await supabase.from("clientes").update(fila).eq("id", cliente.id));
-      else check(await supabase.from("clientes").insert(fila));
-      onSaved();
+      const guardado = cliente
+        ? check(await supabase.from("clientes").update(fila).eq("id", cliente.id).select("id, razon_social, cuit, tipo_ingreso_id").single())
+        : check(await supabase.from("clientes").insert(fila).select("id, razon_social, cuit, tipo_ingreso_id").single());
+      onSaved(guardado, tipoNuevo);
     });
 
   return (

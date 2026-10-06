@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { X, AlertCircle, Loader2 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { number as fmtNumber, parseNumber } from "../lib/format";
@@ -64,6 +64,8 @@ export function MoneyInput({
   );
 }
 
+const pilaModales: object[] = [];
+
 export function Modal({
   title,
   subtitle,
@@ -81,8 +83,17 @@ export function Modal({
   footer?: React.ReactNode;
   size?: string;
 }) {
+  // Con modales anidados, Esc cierra solo el de arriba
+  const token = useRef({});
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const t = token.current;
+    pilaModales.push(t);
+    return () => {
+      pilaModales.splice(pilaModales.indexOf(t), 1);
+    };
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && pilaModales[pilaModales.length - 1] === token.current && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);

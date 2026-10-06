@@ -19,6 +19,7 @@ import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
 import { useData } from "./lib/useData";
 import { exportCsv } from "./lib/csv";
+import { ClienteModal } from "./Clientes";
 import { fecha, hoyISO, iniciales, money, porcentaje, sumarDias, sumarMeses, textoVencimiento, type Moneda } from "./lib/format";
 import {
   CancelButton,
@@ -330,9 +331,14 @@ export default function Ingresos() {
       {nuevo && catalogos.data && (
         <IngresoModal
           catalogos={catalogos.data}
-          onClose={() => setNuevo(false)}
+          // Recarga catálogos también al cancelar: pudo haberse creado un cliente o tipo desde el formulario
+          onClose={() => {
+            setNuevo(false);
+            catalogos.reload();
+          }}
           onSaved={() => {
             setNuevo(false);
+            catalogos.reload();
             reload();
           }}
         />
@@ -341,10 +347,14 @@ export default function Ingresos() {
         <EditarIngresoModal
           ingreso={editando}
           catalogos={catalogos.data}
-          onClose={() => setEditando(null)}
+          onClose={() => {
+            setEditando(null);
+            catalogos.reload();
+          }}
           onSaved={() => {
             setEditando(null);
             setExpandido(null);
+            catalogos.reload();
             reload();
           }}
         />
@@ -672,11 +682,18 @@ function IngresoModal({
   const { saving, error, setError, run } = useSubmit();
   const tieneCobros = (ing?.cobrado ?? 0) > 0;
 
+  // Clientes y tipos creados desde este formulario (se suman a los catálogos sin recargarlos)
+  const [clientesNuevos, setClientesNuevos] = useState<Catalogos["clientes"]>([]);
+  const [tiposNuevos, setTiposNuevos] = useState<Catalogos["tipos"]>([]);
+  const [creando, setCreando] = useState<"cliente" | "tipo" | null>(null);
+  const tipos = [...catalogos.tipos, ...tiposNuevos];
+
   // El cliente actual puede estar inactivo: se agrega a las opciones para no perderlo
+  const clientesBase = [...catalogos.clientes, ...clientesNuevos];
   const clientes =
-    ing && !catalogos.clientes.some((c) => c.id === ing.cliente_id)
-      ? [...catalogos.clientes, { id: ing.cliente_id!, razon_social: `${ing.cliente} (inactivo)`, cuit: ing.cliente_cuit, tipo_ingreso_id: null }]
-      : catalogos.clientes;
+    ing && !clientesBase.some((c) => c.id === ing.cliente_id)
+      ? [...clientesBase, { id: ing.cliente_id!, razon_social: `${ing.cliente} (inactivo)`, cuit: ing.cliente_cuit, tipo_ingreso_id: null }]
+      : clientesBase;
 
   const asignado = vencs.reduce((s, v) => s + (Number.isFinite(v.importe) ? v.importe : 0), 0);
   const diferencia = Math.round(((Number.isFinite(total) ? total : 0) - asignado) * 100) / 100;
@@ -766,26 +783,31 @@ function IngresoModal({
               disabled={tieneCobros}
               title={tieneCobros ? "No se puede cambiar: el ingreso tiene cobros" : undefined}
               onChange={(e) => {
+                if (e.target.value === "nuevo") return setCreando("cliente");
                 setClienteId(e.target.value);
-                const c = catalogos.clientes.find((x) => String(x.id) === e.target.value);
+                const c = clientes.find((x) => String(x.id) === e.target.value);
                 if (c?.tipo_ingreso_id) setTipoId(String(c.tipo_ingreso_id));
               }}
             >
+              {!clienteId && <option value="">Seleccionar…</option>}
               {clientes.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.razon_social}
                   {c.cuit && ` (CUIT ${c.cuit})`}
                 </option>
               ))}
+              <option value="nuevo">+ Nuevo cliente…</option>
             </select>
           </FormGroup>
           <FormGroup label="Tipo de Ingreso *">
-            <select className={selectCls} value={tipoId} onChange={(e) => setTipoId(e.target.value)}>
-              {catalogos.tipos.map((t) => (
+            <select className={selectCls} value={tipoId} onChange={(e) => (e.target.value === "nuevo" ? setCreando("tipo") : setTipoId(e.target.value))}>
+              {!tipoId && <option value="">Seleccionar…</option>}
+              {tipos.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.nombre}
                 </option>
               ))}
+              <option value="nuevo">+ Nuevo tipo de ingreso…</option>
             </select>
           </FormGroup>
           <FormGroup label="Fecha de Factura *">
@@ -926,6 +948,71 @@ function IngresoModal({
           )}
         </div>
       </div>
+      <ErrorBanner message={error} />
+      {creando === "cliente" && (
+        <ClienteModal
+          cliente={null}
+          tipos={tipos}
+          onClose={() => setCreando(null)}
+          onSaved={(c, tipoNuevo) => {
+            setCreando(null);
+            setClientesNuevos((cs) => [...cs, c]);
+            if (tipoNuevo) setTiposNuevos((ts) => [...ts, tipoNuevo]);
+            setClienteId(String(c.id));
+            if (c.tipo_ingreso_id) setTipoId(String(c.tipo_ingreso_id));
+          }}
+        />
+      )}
+      {creando === "tipo" && (
+        <TipoIngresoModal
+          onClose={() => setCreando(null)}
+          onSaved={(t) => {
+            setCreando(null);
+            setTiposNuevos((ts) => [...ts, t]);
+            setTipoId(String(t.id));
+          }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function TipoIngresoModal({ onClose, onSaved }: { onClose: () => void; onSaved: (tipo: { id: number; nombre: string }) => void }) {
+  const [nombre, setNombre] = useState("");
+  const { saving, error, setError, run } = useSubmit();
+
+  const guardar = () =>
+    run(async () => {
+      if (!nombre.trim()) return setError("Indicá el nombre del tipo de ingreso");
+      const { data, error } = await supabase.from("tipos_ingreso").insert({ nombre: nombre.trim() }).select("id, nombre").single();
+      if (error) return setError(error.code === "23505" ? "Ya existe un tipo de ingreso con ese nombre" : error.message);
+      onSaved(data);
+    });
+
+  return (
+    <Modal
+      title="Nuevo Tipo de Ingreso"
+      onClose={onClose}
+      size="max-w-md"
+      footer={
+        <>
+          <CancelButton onClick={onClose} />
+          <SubmitButton onClick={guardar} saving={saving}>
+            Guardar Tipo
+          </SubmitButton>
+        </>
+      }
+    >
+      <FormGroup label="Nombre *">
+        <input
+          className={inputCls}
+          value={nombre}
+          onChange={(e) => setNombre(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && guardar()}
+          placeholder="Ej: Honorario Mensual"
+          autoFocus
+        />
+      </FormGroup>
       <ErrorBanner message={error} />
     </Modal>
   );
