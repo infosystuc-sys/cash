@@ -1,0 +1,6 @@
+{
+  "name": "Fintech Cash Engine",
+  "description": "Plataforma avanzada para gestión de tesorería, flujo de fondos y control de pasivos para agencias de software.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
