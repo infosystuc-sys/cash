@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { PlusCircle, Download, Search, History, CheckCircle, Settings, TrendingDown, Trash2 } from "lucide-react";
+import { PlusCircle, Download, Search, History, CheckCircle, Settings, TrendingDown, Trash2, Pencil } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
 import { useData } from "./lib/useData";
@@ -55,6 +55,7 @@ export const codigoEgreso = (id: number | null | undefined) => `EGR-${String(id 
 export default function Egresos() {
   const [params, setParams] = useSearchParams();
   const [nuevo, setNuevo] = useState(params.get("nuevo") === "1");
+  const [editando, setEditando] = useState<Egreso | null>(null);
 
   useEffect(() => {
     if (params.get("nuevo") === "1") {
@@ -286,7 +287,10 @@ export default function Egresos() {
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-4 text-right">
+                    <td className="px-4 py-4 text-right whitespace-nowrap">
+                      <button onClick={() => setEditando(e)} title="Editar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors opacity-0 group-hover:opacity-100">
+                        <Pencil className="w-4 h-4" />
+                      </button>
                       {e.medio !== "cheque_endosado" && (
                         <button onClick={() => eliminar(e)} title="Eliminar" className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors opacity-0 group-hover:opacity-100">
                           <Trash2 className="w-4 h-4" />
@@ -302,7 +306,7 @@ export default function Egresos() {
       </div>
 
       {nuevo && (
-        <NuevoEgresoModal
+        <EgresoModal
           onClose={() => setNuevo(false)}
           onSaved={() => {
             setNuevo(false);
@@ -310,6 +314,12 @@ export default function Egresos() {
           }}
         />
       )}
+      {editando &&
+        (editando.medio === "cheque_endosado" ? (
+          <EditarEndosoModal egreso={editando} onClose={() => setEditando(null)} onSaved={() => (setEditando(null), reload())} />
+        ) : (
+          <EgresoModal egreso={editando} onClose={() => setEditando(null)} onSaved={() => (setEditando(null), reload())} />
+        ))}
     </div>
   );
 }
@@ -331,16 +341,18 @@ function CategoryMiniCard({ label, amount, percent, color }: { label: string; am
   );
 }
 
-function NuevoEgresoModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function EgresoModal({ egreso, onClose, onSaved }: { egreso?: Egreso; onClose: () => void; onSaved: () => void }) {
+  // En edición se incluyen la categoría/proveedor/cuenta/cuota actuales aunque estén inactivos o la cuota ya esté saldada
+  const incluir = (campo: string, id: number | null | undefined) => (id ? `${campo},id.eq.${id}` : campo);
   const { data: cat, reload } = useData(async () => {
     const [categorias, proveedores, cuentas, cuotas, tc] = await Promise.all([
-      supabase.from("categorias_egreso").select("id, nombre").eq("activa", true).order("nombre"),
-      supabase.from("proveedores").select("id, razon_social").eq("activo", true).order("razon_social"),
-      supabase.from("v_cuentas_saldo").select("id, nombre, moneda, numero, saldo").eq("activa", true).order("id"),
+      supabase.from("categorias_egreso").select("id, nombre").or(incluir("activa.eq.true", egreso?.categoria_egreso_id)).order("nombre"),
+      supabase.from("proveedores").select("id, razon_social").or(incluir("activo.eq.true", egreso?.proveedor_id)).order("razon_social"),
+      supabase.from("v_cuentas_saldo").select("id, nombre, moneda, numero, saldo").or(incluir("activa.eq.true", egreso?.cuenta_id)).order("id"),
       supabase
         .from("v_deuda_cuotas")
         .select("id, numero, fecha_vencimiento, saldo, moneda, proveedor_id, deuda_id, deudas(concepto, categoria_egreso_id, proveedores(razon_social))")
-        .gt("saldo", 0)
+        .or(incluir("saldo.gt.0", egreso?.deuda_cuota_id))
         .order("fecha_vencimiento"),
       supabase.from("v_cotizacion_actual").select("venta").maybeSingle(),
     ]);
@@ -353,17 +365,19 @@ function NuevoEgresoModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
     };
   });
 
-  const [fechaE, setFechaE] = useState(hoyISO());
-  const [categoriaId, setCategoriaId] = useState("");
-  const [proveedorId, setProveedorId] = useState("");
-  const [concepto, setConcepto] = useState("");
-  const [moneda, setMoneda] = useState<Moneda>("ARS");
-  const [importe, setImporte] = useState(NaN);
-  const [tc, setTc] = useState(NaN);
-  const [medio, setMedio] = useState<"transferencia" | "debito_automatico" | "efectivo" | "tarjeta">("transferencia");
-  const [cuentaId, setCuentaId] = useState("");
-  const [vincular, setVincular] = useState(false);
-  const [cuotaId, setCuotaId] = useState("");
+  const [fechaE, setFechaE] = useState(egreso?.fecha ?? hoyISO());
+  const [categoriaId, setCategoriaId] = useState(egreso?.categoria_egreso_id ? String(egreso.categoria_egreso_id) : "");
+  const [proveedorId, setProveedorId] = useState(egreso?.proveedor_id ? String(egreso.proveedor_id) : "");
+  const [concepto, setConcepto] = useState(egreso?.concepto ?? "");
+  const [moneda, setMoneda] = useState<Moneda>((egreso?.moneda as Moneda) ?? "ARS");
+  const [importe, setImporte] = useState(egreso?.importe ?? NaN);
+  const [tc, setTc] = useState(egreso?.tc ?? NaN);
+  const [medio, setMedio] = useState<"transferencia" | "debito_automatico" | "efectivo" | "tarjeta">(
+    (egreso?.medio as "transferencia" | "debito_automatico" | "efectivo" | "tarjeta") ?? "transferencia",
+  );
+  const [cuentaId, setCuentaId] = useState(egreso?.cuenta_id ? String(egreso.cuenta_id) : "");
+  const [vincular, setVincular] = useState(!!egreso?.deuda_cuota_id);
+  const [cuotaId, setCuotaId] = useState(egreso?.deuda_cuota_id ? String(egreso.deuda_cuota_id) : "");
   const [nuevoProv, setNuevoProv] = useState(false);
   const { saving, error, setError, run } = useSubmit();
 
@@ -374,6 +388,7 @@ function NuevoEgresoModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
 
   const cuenta = cat?.cuentas.find((c) => String(c.id) === cuentaId);
   const cuota = cat?.cuotas.find((q) => String(q.id) === cuotaId);
+  const saldoCuota = (q: { id: number | null; saldo: number | null }) => (q.saldo ?? 0) + (egreso && q.id === egreso.deuda_cuota_id ? egreso.importe ?? 0 : 0);
   const necesitaTc = moneda === "USD" || (cuenta && cuenta.moneda !== moneda);
   const equivalenteArs = moneda === "USD" ? (importe || 0) * (tc || 0) : importe || 0;
   const debito = !cuenta ? 0 : cuenta.moneda === moneda ? importe || 0 : cuenta.moneda === "ARS" ? (importe || 0) * (tc || 0) : (importe || 0) / (tc || 1);
@@ -383,7 +398,7 @@ function NuevoEgresoModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
     const q = cat?.cuotas.find((x) => String(x.id) === id);
     if (!q) return;
     setMoneda(q.moneda as Moneda);
-    setImporte(q.saldo ?? NaN);
+    setImporte(saldoCuota(q) || NaN);
     setProveedorId(String(q.proveedor_id ?? ""));
     if (q.deudas?.categoria_egreso_id) setCategoriaId(String(q.deudas.categoria_egreso_id));
     if (!concepto) setConcepto(`${q.deudas?.concepto ?? "Pago deuda"} - Cuota ${q.numero}`);
@@ -397,28 +412,29 @@ function NuevoEgresoModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
       if (necesitaTc && !(tc > 0)) return setError("Ingresá el tipo de cambio");
       if (!cuenta) return setError("Elegí la cuenta de origen");
       if (vincular && !cuota) return setError("Elegí la deuda a cancelar");
-      if (cuota && importe > (cuota.saldo ?? 0)) return setError(`Supera el saldo de la cuota (${money(cuota.saldo, cuota.moneda as Moneda)})`);
-      check(
-        await supabase.from("egresos").insert({
-          fecha: fechaE,
-          categoria_egreso_id: Number(categoriaId),
-          proveedor_id: proveedorId ? Number(proveedorId) : null,
-          concepto: concepto.trim(),
-          moneda,
-          importe,
-          tc: necesitaTc ? tc : null,
-          medio,
-          cuenta_id: cuenta.id!,
-          deuda_cuota_id: vincular && cuota ? cuota.id! : null,
-        }),
-      );
+      if (vincular && cuota && importe > saldoCuota(cuota)) return setError(`Supera el saldo de la cuota (${money(saldoCuota(cuota), cuota.moneda as Moneda)})`);
+      if (vincular && cuota && cuota.moneda !== moneda) return setError("La moneda del egreso debe coincidir con la de la deuda");
+      const fila = {
+        fecha: fechaE,
+        categoria_egreso_id: Number(categoriaId),
+        proveedor_id: proveedorId ? Number(proveedorId) : null,
+        concepto: concepto.trim(),
+        moneda,
+        importe,
+        tc: necesitaTc ? tc : null,
+        medio,
+        cuenta_id: cuenta.id!,
+        deuda_cuota_id: vincular && cuota ? cuota.id! : null,
+      };
+      if (egreso) check(await supabase.from("egresos").update(fila).eq("id", egreso.id!));
+      else check(await supabase.from("egresos").insert(fila));
       onSaved();
     });
 
   return (
     <Modal
-      title="Registrar Nuevo Egreso Operativo"
-      subtitle="Salida de fondos"
+      title={egreso ? `Editar Egreso ${codigoEgreso(egreso.id)}` : "Registrar Nuevo Egreso Operativo"}
+      subtitle={egreso ? egreso.concepto ?? "" : "Salida de fondos"}
       icon={<TrendingDown className="w-6 h-6" />}
       onClose={onClose}
       size="max-w-3xl"
@@ -431,7 +447,7 @@ function NuevoEgresoModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
           <CancelButton onClick={onClose} />
           <SubmitButton onClick={guardar} saving={saving}>
             <CheckCircle className="w-4 h-4" />
-            Confirmar y Registrar Egreso
+            {egreso ? "Guardar Cambios" : "Confirmar y Registrar Egreso"}
           </SubmitButton>
         </>
       }
@@ -544,7 +560,7 @@ function NuevoEgresoModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
                 {cat?.cuotas.map((q) => (
                   <option key={q.id} value={q.id!}>
                     {q.deudas?.proveedores?.razon_social} — {q.deudas?.concepto} — cuota {q.numero} vence {fecha(q.fecha_vencimiento)} (
-                    {money(q.saldo, q.moneda as Moneda)})
+                    {money(saldoCuota(q), q.moneda as Moneda)})
                   </option>
                 ))}
               </select>
@@ -567,6 +583,66 @@ function NuevoEgresoModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
           }}
         />
       )}
+    </Modal>
+  );
+}
+
+/** Egreso generado por un endoso: el importe, la fecha y el proveedor vienen del cheque; solo se editan categoría y concepto. */
+function EditarEndosoModal({ egreso, onClose, onSaved }: { egreso: Egreso; onClose: () => void; onSaved: () => void }) {
+  const { data: categorias } = useData(async () =>
+    check(
+      await supabase
+        .from("categorias_egreso")
+        .select("id, nombre")
+        .or(`activa.eq.true,id.eq.${egreso.categoria_egreso_id}`)
+        .order("nombre"),
+    ),
+  );
+  const [categoriaId, setCategoriaId] = useState(String(egreso.categoria_egreso_id));
+  const [concepto, setConcepto] = useState(egreso.concepto ?? "");
+  const { saving, error, setError, run } = useSubmit();
+
+  const guardar = () =>
+    run(async () => {
+      if (!concepto.trim()) return setError("El concepto es obligatorio");
+      check(await supabase.from("egresos").update({ categoria_egreso_id: Number(categoriaId), concepto: concepto.trim() }).eq("id", egreso.id!));
+      onSaved();
+    });
+
+  return (
+    <Modal
+      title={`Editar Egreso ${codigoEgreso(egreso.id)}`}
+      subtitle={`Endoso cheque #${egreso.cheque_numero} ${egreso.cheque_banco ?? ""}`}
+      icon={<TrendingDown className="w-6 h-6" />}
+      onClose={onClose}
+      size="max-w-lg"
+      footer={
+        <>
+          <CancelButton onClick={onClose} />
+          <SubmitButton onClick={guardar} saving={saving}>
+            <CheckCircle className="w-4 h-4" />
+            Guardar Cambios
+          </SubmitButton>
+        </>
+      }
+    >
+      <p className="text-[11px] text-on-surface-variant">
+        Egreso generado por el endoso de un cheque ({money(egreso.importe, egreso.moneda as Moneda)} a {egreso.proveedor} el {fecha(egreso.fecha)}). El importe, la
+        fecha y el proveedor dependen del cheque; acá solo se pueden cambiar la categoría y el concepto.
+      </p>
+      <FormGroup label="Categoría de Egreso *">
+        <select className={selectCls} value={categoriaId} onChange={(e) => setCategoriaId(e.target.value)}>
+          {categorias?.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.nombre}
+            </option>
+          ))}
+        </select>
+      </FormGroup>
+      <FormGroup label="Concepto *">
+        <input className={inputCls} value={concepto} onChange={(e) => setConcepto(e.target.value)} />
+      </FormGroup>
+      <ErrorBanner message={error} />
     </Modal>
   );
 }
