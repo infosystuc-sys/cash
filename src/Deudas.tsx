@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   PlusCircle,
   Download,
@@ -15,6 +15,7 @@ import {
   ArrowRight,
   ChevronDown,
   Trash2,
+  Pencil,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
@@ -283,7 +284,7 @@ export default function Deudas() {
       </div>
 
       {nueva && (
-        <NuevaDeudaModal
+        <DeudaModal
           tc={data?.tc ?? null}
           onClose={() => setNueva(false)}
           onSaved={() => {
@@ -340,6 +341,7 @@ function KpiCard({
 function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }) {
   const [filtro, setFiltro] = useState<"todas" | "pendientes">("todas");
   const [pagar, setPagar] = useState<Cuota | null>(null);
+  const [editar, setEditar] = useState(false);
 
   const { data, loading, error, reload } = useData(async () => {
     const [deuda, cuotas, pagos] = await Promise.all([
@@ -415,6 +417,13 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
             >
               <ArrowLeft className="w-4 h-4" />
               Volver
+            </button>
+            <button
+              onClick={() => setEditar(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-surface-container-lowest text-on-surface text-xs font-bold rounded-lg border border-outline-variant/30 shadow-sm hover:bg-surface-container-low transition-all"
+            >
+              <Pencil className="w-4 h-4 text-secondary" />
+              Editar
             </button>
             {(d.pagado ?? 0) === 0 && (
               <button
@@ -601,13 +610,24 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
               <Dato label="Categoría" value={d.categoria ?? "—"} />
               <Dato label="Moneda" value={moneda} />
               {moneda === "USD" && <Dato label="TC referencia" value={d.tc_referencia ? money(d.tc_referencia) : "—"} />}
-              <Dato label="Fecha de alta" value={fecha(d.fecha_alta)} />
+              <Dato label="Fecha de factura" value={fecha(d.fecha_alta)} />
               <Dato label="Forma de pago" value={d.forma_pago === "cuotas" ? "En cuotas" : "Pago único"} />
             </dl>
           </div>
         </div>
       </div>
 
+      {editar && (
+        <DeudaModal
+          tc={d.tc_referencia}
+          existente={{ deuda: d, cuotas }}
+          onClose={() => setEditar(false)}
+          onSaved={() => {
+            setEditar(false);
+            reload();
+          }}
+        />
+      )}
       {pagar && (
         <PagoCuotaModal
           deuda={d}
@@ -814,49 +834,85 @@ export function PagoCuotaModal({
 }
 
 // ---------------------------------------------------------------------------
-// Nueva deuda
+// Alta / edición de deuda
 // ---------------------------------------------------------------------------
 
-type CuotaForm = { fecha: string; importe: number };
+/** id y pagado solo aplican a cuotas existentes (edición). */
+type CuotaForm = { id?: number; pagado: number; fecha: string; importe: number };
 
-function NuevaDeudaModal({ tc, onClose, onSaved }: { tc: number | null; onClose: () => void; onSaved: () => void }) {
+function DeudaModal({
+  tc,
+  existente,
+  onClose,
+  onSaved,
+}: {
+  tc: number | null;
+  existente?: { deuda: Deuda; cuotas: Cuota[] };
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const deu = existente?.deuda;
+  // En edición se incluyen el acreedor y la categoría actuales aunque estén inactivos
+  const incluir = (campo: string, id: number | null | undefined) => (id ? `${campo},id.eq.${id}` : campo);
   const { data: cat, reload } = useData(async () => {
     const [proveedores, categorias] = await Promise.all([
-      supabase.from("proveedores").select("id, razon_social, cuit").eq("activo", true).order("razon_social"),
-      supabase.from("categorias_egreso").select("id, nombre").eq("activa", true).order("nombre"),
+      supabase.from("proveedores").select("id, razon_social, cuit").or(incluir("activo.eq.true", deu?.proveedor_id)).order("razon_social"),
+      supabase.from("categorias_egreso").select("id, nombre").or(incluir("activa.eq.true", deu?.categoria_egreso_id)).order("nombre"),
     ]);
     return { proveedores: check(proveedores), categorias: check(categorias) };
   });
 
   const hoy = hoyISO();
-  const [proveedorId, setProveedorId] = useState("");
-  const [concepto, setConcepto] = useState("");
-  const [categoriaId, setCategoriaId] = useState("");
-  const [moneda, setMoneda] = useState<Moneda>("ARS");
-  const [tcRef, setTcRef] = useState(tc ?? NaN);
-  const [total, setTotal] = useState(NaN);
-  const [enCuotas, setEnCuotas] = useState(false);
-  const [cantidad, setCantidad] = useState(6);
-  const [primerVto, setPrimerVto] = useState(sumarDias(hoy, 30));
-  const [cuotas, setCuotas] = useState<CuotaForm[]>([]);
-  const [referencia, setReferencia] = useState("");
-  const [notas, setNotas] = useState("");
+  const cuotasIniciales: CuotaForm[] = (existente?.cuotas ?? []).map((q) => ({
+    id: q.id!,
+    pagado: q.pagado ?? 0,
+    fecha: q.fecha_vencimiento!,
+    importe: q.importe!,
+  }));
+  const [proveedorId, setProveedorId] = useState(deu?.proveedor_id ? String(deu.proveedor_id) : "");
+  const [concepto, setConcepto] = useState(deu?.concepto ?? "");
+  const [categoriaId, setCategoriaId] = useState(deu?.categoria_egreso_id ? String(deu.categoria_egreso_id) : "");
+  const [moneda, setMoneda] = useState<Moneda>((deu?.moneda as Moneda) ?? "ARS");
+  const [tcRef, setTcRef] = useState(deu?.tc_referencia ?? tc ?? NaN);
+  const [total, setTotal] = useState(deu?.importe_total ?? NaN);
+  const [enCuotas, setEnCuotas] = useState(cuotasIniciales.length > 1);
+  const [cantidad, setCantidad] = useState(cuotasIniciales.length > 1 ? cuotasIniciales.length : 6);
+  const [primerVto, setPrimerVto] = useState(cuotasIniciales[0]?.fecha ?? sumarDias(hoy, 30));
+  const [cuotas, setCuotas] = useState<CuotaForm[]>(cuotasIniciales);
+  const [referencia, setReferencia] = useState(deu?.referencia ?? "");
+  const [fechaFactura, setFechaFactura] = useState(deu?.fecha_alta ?? hoy);
+  const [notas, setNotas] = useState(deu?.notas ?? "");
   const [nuevoProv, setNuevoProv] = useState(false);
   const { saving, error, setError, run } = useSubmit();
+  const tienePagos = (deu?.pagado ?? 0) > 0;
 
+  // Regenera el plan; en edición conserva (por posición) las cuotas existentes para no perder sus pagos
   function recalcular() {
     if (!(total > 0)) return;
     const n = enCuotas ? cantidad : 1;
     const base = Math.floor((total / n) * 100) / 100;
-    setCuotas(
+    setCuotas((prev) =>
       Array.from({ length: n }, (_, k) => ({
+        id: prev[k]?.id,
+        pagado: prev[k]?.pagado ?? 0,
         fecha: sumarMeses(primerVto, k),
         importe: k === n - 1 ? Math.round((total - base * (n - 1)) * 100) / 100 : base,
       })),
     );
   }
 
-  useEffect(recalcular, [total, enCuotas, cantidad, primerVto]); // eslint-disable-line react-hooks/exhaustive-deps
+  // No recalcular al abrir: en edición se muestra el plan guardado tal cual
+  const montado = useRef(false);
+  useEffect(() => {
+    if (!montado.current) {
+      montado.current = true;
+      return;
+    }
+    recalcular();
+  }, [total, enCuotas, cantidad, primerVto]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cuotas con pagos que quedarían afuera al reducir la cantidad
+  const quitadasConPago = cuotasIniciales.filter((q) => q.pagado > 0 && !cuotas.some((c) => c.id === q.id));
 
   const asignado = cuotas.reduce((s, q) => s + (Number.isFinite(q.importe) ? q.importe : 0), 0);
   const diferencia = Math.round(((total || 0) - asignado) * 100) / 100;
@@ -864,24 +920,37 @@ function NuevaDeudaModal({ tc, onClose, onSaved }: { tc: number | null; onClose:
   const guardar = () =>
     run(async () => {
       if (!proveedorId) return setError("Elegí el acreedor");
+      if (!fechaFactura) return setError("Indicá la fecha de factura");
       if (!concepto.trim()) return setError("El concepto es obligatorio");
       if (!(total > 0)) return setError("Ingresá el importe total");
       if (moneda === "USD" && !(tcRef > 0)) return setError("Indicá el TC de referencia");
       if (cuotas.some((q) => !q.fecha || !(q.importe > 0))) return setError("Revisá las cuotas");
       if (diferencia !== 0) return setError("La suma de cuotas debe igualar el total");
-      check(
-        await supabase.rpc("crear_deuda", {
-          p_proveedor_id: Number(proveedorId),
-          p_concepto: concepto.trim(),
-          p_moneda: moneda,
-          p_importe_total: total,
-          p_cuotas: cuotas.map((q) => ({ fecha_vencimiento: q.fecha, importe: q.importe })),
-          p_categoria_egreso_id: categoriaId ? Number(categoriaId) : undefined,
-          p_tc_referencia: moneda === "USD" ? tcRef : undefined,
-          p_referencia: referencia.trim() || undefined,
-          p_notas: notas.trim() || undefined,
-        }),
-      );
+      if (quitadasConPago.length) return setError("No se pueden quitar cuotas que ya tienen pagos registrados");
+      const bajo = cuotas.findIndex((q) => q.importe < q.pagado);
+      if (bajo >= 0) return setError(`La cuota #${bajo + 1} no puede ser menor a lo ya pagado (${money(cuotas[bajo].pagado, moneda)})`);
+      const args = {
+        p_proveedor_id: Number(proveedorId),
+        p_concepto: concepto.trim(),
+        p_moneda: moneda,
+        p_importe_total: total,
+        p_categoria_egreso_id: categoriaId ? Number(categoriaId) : undefined,
+        p_tc_referencia: moneda === "USD" ? tcRef : undefined,
+        p_referencia: referencia.trim() || undefined,
+        p_notas: notas.trim() || undefined,
+        p_fecha_alta: fechaFactura,
+      };
+      if (deu) {
+        check(
+          await supabase.rpc("actualizar_deuda", {
+            p_id: deu.id!,
+            ...args,
+            p_cuotas: cuotas.map((q) => ({ id: q.id ?? null, fecha_vencimiento: q.fecha, importe: q.importe })),
+          }),
+        );
+      } else {
+        check(await supabase.rpc("crear_deuda", { ...args, p_cuotas: cuotas.map((q) => ({ fecha_vencimiento: q.fecha, importe: q.importe })) }));
+      }
       onSaved();
     });
 
@@ -889,8 +958,8 @@ function NuevaDeudaModal({ tc, onClose, onSaved }: { tc: number | null; onClose:
 
   return (
     <Modal
-      title="Registrar Nueva Deuda u Obligación"
-      subtitle="Configuración del pasivo, tipo de cambio e imputación de cuotas"
+      title={deu ? `Editar Deuda #${codigoDeuda(deu.id)}` : "Registrar Nueva Deuda u Obligación"}
+      subtitle={deu ? `${deu.proveedor} • ${deu.concepto}` : "Configuración del pasivo, tipo de cambio e imputación de cuotas"}
       icon={<CreditCard className="w-6 h-6" />}
       onClose={onClose}
       size="max-w-3xl"
@@ -899,14 +968,20 @@ function NuevaDeudaModal({ tc, onClose, onSaved }: { tc: number | null; onClose:
           <CancelButton onClick={onClose} />
           <SubmitButton onClick={guardar} saving={saving}>
             <CheckCircle className="w-4 h-4" />
-            Guardar Deuda y Plan de Cuotas
+            {deu ? "Guardar Cambios" : "Guardar Deuda y Plan de Cuotas"}
           </SubmitButton>
         </>
       }
     >
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
         <FormGroup label="Acreedor / Proveedor *">
-          <select className={selectCls} value={proveedorId} onChange={(e) => (e.target.value === "nuevo" ? setNuevoProv(true) : setProveedorId(e.target.value))}>
+          <select
+            className={selectCls}
+            value={proveedorId}
+            disabled={tienePagos}
+            title={tienePagos ? "No se puede cambiar: la deuda tiene pagos" : undefined}
+            onChange={(e) => (e.target.value === "nuevo" ? setNuevoProv(true) : setProveedorId(e.target.value))}
+          >
             <option value="">Seleccionar…</option>
             {cat?.proveedores.map((p) => (
               <option key={p.id} value={p.id}>
@@ -936,9 +1011,10 @@ function NuevaDeudaModal({ tc, onClose, onSaved }: { tc: number | null; onClose:
               <button
                 key={m}
                 type="button"
+                disabled={tienePagos}
                 onClick={() => setMoneda(m)}
                 className={cn(
-                  "flex-1 h-10 rounded-lg text-xs font-bold border transition-all",
+                  "flex-1 h-10 rounded-lg text-xs font-bold border transition-all disabled:opacity-60",
                   moneda === m ? "bg-secondary text-on-secondary border-secondary" : "bg-surface-container-low text-on-surface-variant border-outline-variant/10",
                 )}
               >
@@ -959,6 +1035,9 @@ function NuevaDeudaModal({ tc, onClose, onSaved }: { tc: number | null; onClose:
         </FormGroup>
         <FormGroup label="Referencia / Contrato">
           <input className={inputCls} value={referencia} onChange={(e) => setReferencia(e.target.value)} placeholder="Contrato #DL-AR-8831" />
+        </FormGroup>
+        <FormGroup label="Fecha de factura *">
+          <input type="date" className={inputCls} value={fechaFactura} onChange={(e) => setFechaFactura(e.target.value)} />
         </FormGroup>
       </div>
 
@@ -1016,11 +1095,19 @@ function NuevaDeudaModal({ tc, onClose, onSaved }: { tc: number | null; onClose:
                       className="w-48 ml-auto"
                       inputClassName="h-8"
                     />
+                    {q.pagado > 0 && (
+                      <div className="text-right text-[9px] font-bold text-on-tertiary-container">Pagado {money(q.pagado, moneda)}</div>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        )}
+        {quitadasConPago.length > 0 && (
+          <p className="text-[11px] font-bold text-error">
+            Hay {quitadasConPago.length} cuota(s) con pagos que quedarían afuera del plan: aumentá la cantidad de cuotas.
+          </p>
         )}
         <div className="flex items-center justify-between text-[11px]">
           <span>

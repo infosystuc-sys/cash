@@ -1323,6 +1323,22 @@ export type Database = {
       }
     }
     Functions: {
+      actualizar_deuda: {
+        Args: {
+          p_categoria_egreso_id?: number
+          p_concepto: string
+          p_cuotas: Json
+          p_fecha_alta?: string
+          p_id: number
+          p_importe_total: number
+          p_moneda: Database["public"]["Enums"]["moneda"]
+          p_notas?: string
+          p_proveedor_id: number
+          p_referencia?: string
+          p_tc_referencia?: number
+        }
+        Returns: undefined
+      }
       actualizar_ingreso: {
         Args: {
           p_cliente_id: number
