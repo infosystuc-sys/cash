@@ -16,6 +16,7 @@ import {
   ArrowUpRight,
   Pencil,
   Wallet,
+  Trash2,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
@@ -695,6 +696,39 @@ function CuentaModal({ cuenta, onClose, onSaved }: { cuenta: Cuenta | null; onCl
     });
   }
 
+  // Movimientos que impiden borrar: cobros (incluso anulados), egresos, transferencias y cheques depositados
+  const { data: movimientos } = useData(async () => {
+    if (!cuenta) return 0;
+    const id = cuenta.id!;
+    const contar = async (q: PromiseLike<{ count: number | null; error: { message: string } | null }>) => {
+      const { count, error } = await q;
+      if (error) throw new Error(error.message);
+      return count ?? 0;
+    };
+    const n = await Promise.all([
+      contar(supabase.from("cobros").select("id", { count: "exact", head: true }).eq("cuenta_id", id)),
+      contar(supabase.from("egresos").select("id", { count: "exact", head: true }).eq("cuenta_id", id)),
+      contar(supabase.from("transferencias").select("id", { count: "exact", head: true }).or(`cuenta_origen_id.eq.${id},cuenta_destino_id.eq.${id}`)),
+      contar(supabase.from("cheques").select("id", { count: "exact", head: true }).eq("cuenta_deposito_id", id)),
+    ]);
+    return n.reduce((a, b) => a + b, 0);
+  }, [cuenta?.id]);
+
+  async function eliminar() {
+    if (!cuenta) return;
+    const aviso =
+      (cuenta.saldo_inicial ?? 0) !== 0
+        ? `¿Eliminar la cuenta ${cuenta.nombre}? Tiene un saldo inicial de ${money(cuenta.saldo_inicial, cuenta.moneda as Moneda)} que dejará de computarse.`
+        : `¿Eliminar la cuenta ${cuenta.nombre}?`;
+    if (!confirm(aviso + " Esta acción no se puede deshacer.")) return;
+    await run(async () => {
+      const { error } = await supabase.from("cuentas").delete().eq("id", cuenta.id!);
+      // La FK impide borrar si apareció un movimiento entre la verificación y el borrado
+      if (error) throw new Error(error.code === "23503" ? "No se puede eliminar: la cuenta tiene movimientos. Podés desactivarla." : error.message);
+      onSaved();
+    });
+  }
+
   return (
     <Modal
       title={cuenta ? "Editar Cuenta" : "Nueva Cuenta"}
@@ -704,9 +738,26 @@ function CuentaModal({ cuenta, onClose, onSaved }: { cuenta: Cuenta | null; onCl
       footer={
         <>
           {cuenta && (
-            <button onClick={desactivar} className="mr-auto text-xs font-bold text-error hover:underline">
-              Desactivar cuenta
-            </button>
+            <div className="mr-auto flex items-center gap-4">
+              <button onClick={desactivar} className="text-xs font-bold text-error hover:underline">
+                Desactivar cuenta
+              </button>
+              <button
+                onClick={eliminar}
+                disabled={movimientos !== 0}
+                title={
+                  movimientos === null
+                    ? "Verificando movimientos…"
+                    : movimientos > 0
+                      ? `No se puede eliminar: tiene ${movimientos} movimiento(s). Podés desactivarla.`
+                      : "Eliminar cuenta (sin movimientos)"
+                }
+                className="flex items-center gap-1 text-xs font-bold text-error hover:underline disabled:opacity-30 disabled:no-underline disabled:cursor-not-allowed"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Eliminar cuenta
+              </button>
+            </div>
           )}
           <CancelButton onClick={onClose} />
           <SubmitButton onClick={guardar} saving={saving}>
