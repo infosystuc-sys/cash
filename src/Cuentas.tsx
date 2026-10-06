@@ -50,6 +50,7 @@ const TIPOS_CUENTA: Record<string, string> = {
 
 export default function Cuentas() {
   const [transferir, setTransferir] = useState(false);
+  const [editandoTransf, setEditandoTransf] = useState<Transferencia | null>(null);
   const [editando, setEditando] = useState<Cuenta | "nueva" | null>(null);
   const [seleccionada, setSeleccionada] = useState<number | null>(null);
 
@@ -236,7 +237,7 @@ export default function Cuentas() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {data.cuentas.map((c) => (
-                <AccountCard key={c.id} cuenta={c} tc={data.tc} onClick={() => setSeleccionada(c.id!)} />
+                <AccountCard key={c.id} cuenta={c} tc={data.tc} onClick={() => setSeleccionada(c.id!)} onEdit={() => setEditando(c)} />
               ))}
 
               <div className="bg-surface-container-low border border-outline-variant/10 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center gap-4 hover:border-secondary/40 hover:bg-surface-container transition-all group">
@@ -273,10 +274,11 @@ export default function Cuentas() {
                     <th className="py-3 px-4">Cuenta Destino</th>
                     <th className="py-3 px-4">Concepto / Motivo</th>
                     <th className="py-3 px-4 text-right">Importe</th>
+                    <th className="py-3 px-4"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-outline-variant/10 text-xs">
-                  {data.transferencias.length === 0 && <EmptyRow colSpan={5} label="Sin transferencias" />}
+                  {data.transferencias.length === 0 && <EmptyRow colSpan={6} label="Sin transferencias" />}
                   {data.transferencias.map((t) => (
                     <tr key={t.id} className="hover:bg-surface-container-low/50 transition-colors group">
                       <td className="py-4 px-4 font-numeric text-outline font-medium">{fecha(t.fecha)}</td>
@@ -299,6 +301,11 @@ export default function Cuentas() {
                           <div className="text-[10px] text-on-surface-variant">→ {money(t.importe_destino, t.moneda_destino as Moneda)}</div>
                         )}
                       </td>
+                      <td className="py-4 px-4 text-right">
+                        <button onClick={() => setEditandoTransf(t)} title="Editar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors">
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -308,6 +315,17 @@ export default function Cuentas() {
         </>
       )}
 
+      {editandoTransf && data && (
+        <TransferenciaModal
+          cuentas={data.cuentas}
+          transferencia={editandoTransf}
+          onClose={() => setEditandoTransf(null)}
+          onSaved={() => {
+            setEditandoTransf(null);
+            reload();
+          }}
+        />
+      )}
       {transferir && data && (
         <TransferenciaModal
           cuentas={data.cuentas}
@@ -491,7 +509,7 @@ function StatItem({ label, value, color }: { label: string; value: string; color
   );
 }
 
-function AccountCard({ cuenta, tc, onClick }: { cuenta: Cuenta; tc: number | null; onClick: () => void }) {
+function AccountCard({ cuenta, tc, onClick, onEdit }: { cuenta: Cuenta; tc: number | null; onClick: () => void; onEdit: () => void }) {
   const isUSD = cuenta.moneda === "USD";
   const Icono = isUSD ? DollarSign : cuenta.tipo === "efectivo" ? Wallet : Landmark;
   return (
@@ -518,8 +536,20 @@ function AccountCard({ cuenta, tc, onClick }: { cuenta: Cuenta; tc: number | nul
               {cuenta.numero && ` #${cuenta.numero}`} • {isUSD ? "USD" : "Pesos (ARS)"}
             </p>
           </div>
-          <div className="p-2.5 rounded-xl bg-surface-container-low text-outline group-hover:bg-secondary group-hover:text-on-secondary transition-colors border border-outline-variant/10">
-            <Icono className="w-5 h-5" />
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit();
+              }}
+              title="Editar cuenta"
+              className="p-2 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+            <div className="p-2.5 rounded-xl bg-surface-container-low text-outline group-hover:bg-secondary group-hover:text-on-secondary transition-colors border border-outline-variant/10">
+              <Icono className="w-5 h-5" />
+            </div>
           </div>
         </div>
         <div className="space-y-1">
@@ -544,36 +574,58 @@ function AccountCard({ cuenta, tc, onClick }: { cuenta: Cuenta; tc: number | nul
   );
 }
 
-function TransferenciaModal({ cuentas, onClose, onSaved }: { cuentas: Cuenta[]; onClose: () => void; onSaved: () => void }) {
-  const [origenId, setOrigenId] = useState(String(cuentas[0]?.id ?? ""));
-  const [destinoId, setDestinoId] = useState(String(cuentas[1]?.id ?? ""));
-  const [fechaT, setFechaT] = useState(hoyISO());
-  const [importe, setImporte] = useState(NaN);
-  const [importeDestino, setImporteDestino] = useState(NaN);
-  const [concepto, setConcepto] = useState("");
+type Transferencia = Row<"v_transferencias">;
+
+function TransferenciaModal({
+  cuentas,
+  transferencia,
+  onClose,
+  onSaved,
+}: {
+  cuentas: Cuenta[];
+  transferencia?: Transferencia;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const t = transferencia;
+  const [origenId, setOrigenId] = useState(String(t?.cuenta_origen_id ?? cuentas[0]?.id ?? ""));
+  const [destinoId, setDestinoId] = useState(String(t?.cuenta_destino_id ?? cuentas[1]?.id ?? ""));
+  const [fechaT, setFechaT] = useState(t?.fecha ?? hoyISO());
+  const [importe, setImporte] = useState(t?.importe_origen ?? NaN);
+  const [importeDestino, setImporteDestino] = useState(t?.importe_destino ?? NaN);
+  const [concepto, setConcepto] = useState(t?.concepto ?? "");
   const { saving, error, setError, run } = useSubmit();
 
   const origen = cuentas.find((c) => String(c.id) === origenId);
   const destino = cuentas.find((c) => String(c.id) === destinoId);
   const distintaMoneda = origen && destino && origen.moneda !== destino.moneda;
   const montoDestino = distintaMoneda ? importeDestino : importe;
+  // Solo se listan cuentas activas: si la transferencia original usa una desactivada, no se puede editar desde acá
+  const cuentaInactiva = !!t && (!cuentas.some((c) => c.id === t.cuenta_origen_id) || !cuentas.some((c) => c.id === t.cuenta_destino_id));
+
+  // Saldo de la cuenta sin el efecto de la transferencia original (para que el impacto proyectado no la cuente dos veces)
+  const saldoSinOriginal = (c: Cuenta) =>
+    (c.saldo ?? 0) +
+    (t && c.id === t.cuenta_origen_id ? t.importe_origen ?? 0 : 0) -
+    (t && c.id === t.cuenta_destino_id ? t.importe_destino ?? 0 : 0);
 
   const guardar = () =>
     run(async () => {
+      if (cuentaInactiva) return setError("La transferencia usa una cuenta desactivada; reactivála para poder editarla");
       if (!origen || !destino) return setError("Elegí cuenta de origen y destino");
       if (origen.id === destino.id) return setError("Origen y destino deben ser distintos");
       if (!(importe > 0)) return setError("Ingresá un importe válido");
       if (distintaMoneda && !(importeDestino > 0)) return setError("Ingresá el importe acreditado en destino");
-      check(
-        await supabase.from("transferencias").insert({
-          fecha: fechaT,
-          cuenta_origen_id: origen.id!,
-          cuenta_destino_id: destino.id!,
-          importe_origen: importe,
-          importe_destino: montoDestino,
-          concepto: concepto.trim() || null,
-        }),
-      );
+      const fila = {
+        fecha: fechaT,
+        cuenta_origen_id: origen.id!,
+        cuenta_destino_id: destino.id!,
+        importe_origen: importe,
+        importe_destino: montoDestino,
+        concepto: concepto.trim() || null,
+      };
+      if (t) check(await supabase.from("transferencias").update(fila).eq("id", t.id!));
+      else check(await supabase.from("transferencias").insert(fila));
       onSaved();
     });
 
@@ -585,7 +637,7 @@ function TransferenciaModal({ cuentas, onClose, onSaved }: { cuentas: Cuenta[]; 
 
   return (
     <Modal
-      title="Transferencia entre Cuentas"
+      title={t ? "Editar Transferencia" : "Transferencia entre Cuentas"}
       subtitle="Traspaso de fondos sin impacto en resultado."
       icon={<ArrowLeftRight className="w-6 h-6" />}
       onClose={onClose}
@@ -595,7 +647,7 @@ function TransferenciaModal({ cuentas, onClose, onSaved }: { cuentas: Cuenta[]; 
           <CancelButton onClick={onClose} />
           <SubmitButton onClick={guardar} saving={saving}>
             <CheckCircle className="w-4 h-4" />
-            Confirmar Transferencia
+            {t ? "Guardar Cambios" : "Confirmar Transferencia"}
           </SubmitButton>
         </>
       }
@@ -637,17 +689,20 @@ function TransferenciaModal({ cuentas, onClose, onSaved }: { cuentas: Cuenta[]; 
             <div className="p-2 rounded bg-surface-container-lowest border border-outline-variant/10">
               <span className="text-[8px] font-bold text-error uppercase block mb-1">Origen Después:</span>
               <span className="text-xs font-bold font-numeric text-on-surface">
-                {money((origen.saldo ?? 0) - (importe || 0), origen.moneda as Moneda)}
+                {money(saldoSinOriginal(origen) - (importe || 0), origen.moneda as Moneda)}
               </span>
             </div>
             <div className="p-2 rounded bg-surface-container-lowest border border-outline-variant/10">
               <span className="text-[8px] font-bold text-on-tertiary-container uppercase block mb-1">Destino Después:</span>
               <span className="text-xs font-bold font-numeric text-on-surface">
-                {money((destino.saldo ?? 0) + (montoDestino || 0), destino.moneda as Moneda)}
+                {money(saldoSinOriginal(destino) + (montoDestino || 0), destino.moneda as Moneda)}
               </span>
             </div>
           </div>
         </div>
+      )}
+      {cuentaInactiva && (
+        <p className="text-[11px] font-bold text-error">Esta transferencia usa una cuenta desactivada: reactivála para poder editarla.</p>
       )}
       <ErrorBanner message={error} />
     </Modal>
@@ -783,7 +838,9 @@ function CuentaModal({ cuenta, onClose, onSaved }: { cuenta: Cuenta | null; onCl
           </select>
         </FormGroup>
         <FormGroup label="Moneda *">
-          <select className={selectCls} value={f.moneda} onChange={(e) => set("moneda", e.target.value as Moneda)} disabled={!!cuenta}>
+          <select className={selectCls} value={f.moneda} onChange={(e) => set("moneda", e.target.value as Moneda)} disabled={!!cuenta && movimientos !== 0}
+            title={cuenta && movimientos !== 0 ? "No se puede cambiar la moneda: la cuenta tiene movimientos" : undefined}
+          >
             <option value="ARS">Pesos (ARS)</option>
             <option value="USD">Dólares (USD)</option>
           </select>
