@@ -4,7 +4,7 @@ Tesorería y cash flow (ingresos, cheques, deudas, egresos, cuentas) con React +
 
 ## Correr en local
 
-1. `npm install --legacy-peer-deps`
+1. `npm install`
 2. Copiar `.env.example` a `.env.local` y completar `VITE_SUPABASE_PUBLISHABLE_KEY`.
 3. `npm run dev` → http://localhost:3000
 
