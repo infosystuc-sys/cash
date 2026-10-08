@@ -29,16 +29,20 @@ import {
   EmptyRow,
   ErrorBanner,
   FormGroup,
+  ImputacionPreview,
   Loading,
   Modal,
+  ModoImputacionSelector,
   MoneyInput,
   Segmented,
   SubmitButton,
   inputCls,
+  repartir,
   selectCls,
   useSubmit,
   useOrden,
   ThOrden,
+  type ModoImputacion,
 } from "./components/ui";
 
 type Ingreso = Row<"v_ingresos">;
@@ -726,7 +730,7 @@ function VencimientosDetalle({ ingreso, onCobrar }: { ingreso: Ingreso; onCobrar
     const cobros = check(
       await supabase
         .from("cobros")
-        .select("id, fecha, importe, medio, anulado, cuentas(nombre), cheques(numero, banco_emisor, estado)")
+        .select("id, fecha, importe, medio, anulado, ingreso_vencimiento_id, cuentas(nombre), cheques(numero, banco_emisor, estado)")
         .in("ingreso_vencimiento_id", venc.map((v) => v.id!))
         .order("fecha"),
     );
@@ -745,9 +749,18 @@ function VencimientosDetalle({ ingreso, onCobrar }: { ingreso: Ingreso; onCobrar
               {data?.venc.map((v) => (
                 <div key={v.id} className="flex items-center gap-4 bg-surface-container-lowest p-3 rounded-xl border border-outline-variant/20">
                   <span className="w-8 h-8 rounded-lg bg-surface-container-high flex items-center justify-center text-[10px] font-bold text-outline">#{v.numero}</span>
-                  <div className="flex-1 grid grid-cols-3 gap-2 items-center">
+                  <div className="flex-1 grid grid-cols-4 gap-2 items-center">
                     <span className="font-numeric font-bold">{fecha(v.fecha_vencimiento)}</span>
                     <span className="font-numeric font-bold text-right">{money(v.importe, moneda)}</span>
+                    <span className="text-[10px] text-on-tertiary-container text-right">
+                      {(v.cobrado ?? 0) > 0 ? (
+                        <>
+                          Cobrado <strong className="font-numeric">{money(v.cobrado, moneda)}</strong>
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </span>
                     <span className="text-[10px] text-on-surface-variant text-right">
                       Saldo <strong className="font-numeric">{money(v.saldo, moneda)}</strong>
                     </span>
@@ -775,9 +788,18 @@ function VencimientosDetalle({ ingreso, onCobrar }: { ingreso: Ingreso; onCobrar
             <div className="space-y-2">
               <span className="text-[10px] font-bold text-secondary uppercase tracking-widest">Cobros registrados</span>
               {data?.cobros.length === 0 && <p className="text-xs text-outline">Sin cobros.</p>}
-              {data?.cobros.map((c) => (
-                <div key={c.id} className={cn("flex items-center justify-between bg-surface-container-lowest p-3 rounded-xl border border-outline-variant/20", c.anulado && "opacity-50 line-through")}>
+              {data?.cobros.map((c) => {
+                const v = data.venc.find((x) => x.id === c.ingreso_vencimiento_id);
+                const parcial = v != null && c.importe < (v.importe ?? 0);
+                return (
+                <div key={c.id} className={cn("flex items-center justify-between gap-2 bg-surface-container-lowest p-3 rounded-xl border border-outline-variant/20", c.anulado && "opacity-50 line-through")}>
                   <span className="font-numeric font-bold">{fecha(c.fecha)}</span>
+                  {v && (
+                    <span className="text-[10px] font-bold text-outline whitespace-nowrap">
+                      #{v.numero}
+                      {parcial && " • parcial"}
+                    </span>
+                  )}
                   <span className="text-[11px] text-on-surface-variant">
                     {c.medio === "cheque" && c.cheques
                       ? `Cheque #${c.cheques.numero} ${c.cheques.banco_emisor} (${c.cheques.estado.replace("_", " ")})`
@@ -785,7 +807,8 @@ function VencimientosDetalle({ ingreso, onCobrar }: { ingreso: Ingreso; onCobrar
                   </span>
                   <span className="font-numeric font-bold text-on-tertiary-container">{money(c.importe, moneda)}</span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -1219,9 +1242,10 @@ function CobroModal({
     check(await supabase.from("v_ingreso_vencimientos").select("*").eq("ingreso_id", ingreso.id!).gt("saldo", 0).order("numero")),
   );
 
+  const [modo, setModo] = useState<ModoImputacion>("total");
   const [vencId, setVencId] = useState<string>(vencimientoInicial ? String(vencimientoInicial.id) : "");
   const venc = vencs?.find((v) => String(v.id) === vencId) ?? vencs?.[0];
-  const [importe, setImporte] = useState(vencimientoInicial?.saldo ?? NaN);
+  const [importe, setImporte] = useState(NaN);
   const [fechaC, setFechaC] = useState(hoyISO());
   const [medio, setMedio] = useState<"transferencia" | "efectivo" | "deposito" | "cheque">("transferencia");
   const [cuentaId, setCuentaId] = useState(String(cuentas.find((c) => c.moneda === moneda)?.id ?? cuentas[0]?.id ?? ""));
@@ -1230,11 +1254,17 @@ function CobroModal({
   const { saving, error, setError, run } = useSubmit();
 
   useEffect(() => {
-    if (!vencId && vencs?.[0]) {
-      setVencId(String(vencs[0].id));
-      setImporte(vencs[0].saldo ?? NaN);
-    }
+    if (!vencId && vencs?.[0]) setVencId(String(vencs[0].id));
   }, [vencs, vencId]);
+
+  // Un cheque queda asociado a un único cobro: no se puede repartir entre vencimientos
+  useEffect(() => {
+    if (modo === "cuenta" && medio === "cheque") setMedio("transferencia");
+  }, [modo, medio]);
+
+  const saldoIngreso = (vencs ?? []).reduce((s, v) => s + (v.saldo ?? 0), 0);
+  const monto = modo === "total" ? venc?.saldo ?? 0 : importe;
+  const reparto = modo === "cuenta" ? repartir(monto, vencs ?? []) : [];
 
   const cuenta = cuentas.find((c) => String(c.id) === cuentaId);
   const necesitaTc = medio === "cheque" ? moneda === "USD" : cuenta && cuenta.moneda !== moneda;
@@ -1242,16 +1272,31 @@ function CobroModal({
   const guardar = () =>
     run(async () => {
       if (!venc) return setError("No hay vencimientos pendientes");
-      if (!(importe > 0)) return setError("Ingresá el importe cobrado");
-      if (importe > (venc.saldo ?? 0)) return setError(`El importe supera el saldo del vencimiento (${money(venc.saldo, moneda)})`);
+      if (!(monto > 0)) return setError("Ingresá el importe cobrado");
+      if (modo === "parcial" && monto >= (venc.saldo ?? 0))
+        return setError(`Un cobro parcial debe ser menor al saldo del vencimiento (${money(venc.saldo, moneda)}). Para cancelarlo elegí "Total".`);
+      if (modo === "cuenta" && monto > saldoIngreso) return setError(`Supera el saldo pendiente del ingreso (${money(saldoIngreso, moneda)})`);
       if (necesitaTc && !(tcCobro > 0)) return setError("Ingresá el tipo de cambio");
       if (medio === "cheque" && (!ch.banco_emisor.trim() || !ch.numero.trim() || !ch.fecha_pago)) return setError("Completá banco, número y fecha de pago del cheque");
       if (medio !== "cheque" && !cuenta) return setError("Elegí la cuenta destino");
+      if (modo === "cuenta") {
+        check(
+          await supabase.rpc("registrar_cobro_a_cuenta", {
+            p_ingreso_id: ingreso.id!,
+            p_fecha: fechaC,
+            p_importe: monto,
+            p_medio: medio,
+            p_cuenta_id: cuenta!.id,
+            p_tc: necesitaTc || moneda === "USD" ? tcCobro : undefined,
+          }),
+        );
+        return onSaved();
+      }
       check(
         await supabase.rpc("registrar_cobro", {
           p_vencimiento_id: venc.id!,
           p_fecha: fechaC,
-          p_importe: importe,
+          p_importe: monto,
           p_medio: medio,
           p_cuenta_id: medio === "cheque" ? undefined : cuenta!.id,
           p_tc: necesitaTc || moneda === "USD" ? tcCobro : undefined,
@@ -1264,7 +1309,7 @@ function CobroModal({
   return (
     <Modal
       title="Registrar Cobro"
-      subtitle={`${ingreso.cliente} • ${ingreso.descripcion}`}
+      subtitle={`${ingreso.cliente} • ${ingreso.descripcion} • saldo ${money(saldoIngreso, moneda)}`}
       icon={<CreditCard className="w-6 h-6" />}
       onClose={onClose}
       footer={
@@ -1277,35 +1322,44 @@ function CobroModal({
         </>
       }
     >
+      <ModoImputacionSelector value={modo} onChange={setModo} etiqueta="vencimiento" cuentaDeshabilitada={(vencs?.length ?? 0) < 2} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-        <FormGroup label="Vencimiento *" className="sm:col-span-2">
-          <select
-            className={selectCls}
-            value={venc ? String(venc.id) : ""}
-            onChange={(e) => {
-              setVencId(e.target.value);
-              setImporte(vencs?.find((v) => String(v.id) === e.target.value)?.saldo ?? NaN);
-            }}
-          >
-            {vencs?.map((v) => (
-              <option key={v.id} value={v.id!}>
-                Cuota #{v.numero} • vence {fecha(v.fecha_vencimiento)} • saldo {money(v.saldo, moneda)}
-              </option>
-            ))}
-          </select>
-        </FormGroup>
+        {modo !== "cuenta" && (
+          <FormGroup label="Vencimiento *" className="sm:col-span-2">
+            <select className={selectCls} value={venc ? String(venc.id) : ""} onChange={(e) => setVencId(e.target.value)}>
+              {vencs?.map((v) => (
+                <option key={v.id} value={v.id!}>
+                  Cuota #{v.numero} • vence {fecha(v.fecha_vencimiento)} • saldo {money(v.saldo, moneda)}
+                  {(v.cobrado ?? 0) > 0 && " (cobro parcial previo)"}
+                </option>
+              ))}
+            </select>
+          </FormGroup>
+        )}
         <FormGroup label="Fecha de cobro *">
           <input type="date" className={inputCls} value={fechaC} onChange={(e) => setFechaC(e.target.value)} />
         </FormGroup>
         <FormGroup label={`Importe cobrado * (${moneda})`}>
-          <MoneyInput value={importe} onChange={setImporte} prefix={moneda === "USD" ? "U$S" : "$"} />
+          {modo === "total" ? (
+            <div className="h-10 px-3 rounded-lg bg-surface-container-low flex items-center justify-end text-xs font-bold font-numeric text-primary">
+              {money(monto, moneda)}
+            </div>
+          ) : (
+            <MoneyInput value={importe} onChange={setImporte} prefix={moneda === "USD" ? "U$S" : "$"} />
+          )}
+          {modo === "parcial" && venc && monto > 0 && monto < (venc.saldo ?? 0) && (
+            <span className="text-[10px] font-bold text-secondary">Queda saldo en el vencimiento: {money((venc.saldo ?? 0) - monto, moneda)}</span>
+          )}
+          {modo === "cuenta" && <span className="text-[10px] text-on-surface-variant">Máximo {money(saldoIngreso, moneda)}</span>}
         </FormGroup>
         <FormGroup label="Medio de cobro *">
           <select className={selectCls} value={medio} onChange={(e) => setMedio(e.target.value as typeof medio)}>
             <option value="transferencia">Transferencia</option>
             <option value="deposito">Depósito</option>
             <option value="efectivo">Efectivo</option>
-            <option value="cheque">Cheque / eCheq (entra a cartera)</option>
+            <option value="cheque" disabled={modo === "cuenta"}>
+              Cheque / eCheq (entra a cartera){modo === "cuenta" && " — no disponible a cuenta"}
+            </option>
           </select>
         </FormGroup>
         {medio !== "cheque" && (
@@ -1350,13 +1404,14 @@ function CobroModal({
           <FormGroup label="CUIT librador">
             <input className={inputCls} value={ch.librador_cuit} onChange={(e) => setCh({ ...ch, librador_cuit: e.target.value })} />
           </FormGroup>
-          {moneda === "USD" && Number.isFinite(importe) && tcCobro > 0 && (
+          {moneda === "USD" && Number.isFinite(monto) && tcCobro > 0 && (
             <p className="sm:col-span-2 text-[11px] text-on-surface-variant">
-              Importe del cheque: <strong className="font-numeric">{money(importe * tcCobro)}</strong>
+              Importe del cheque: <strong className="font-numeric">{money(monto * tcCobro)}</strong>
             </p>
           )}
         </div>
       )}
+      {modo === "cuenta" && <ImputacionPreview items={reparto} moneda={moneda} etiqueta="Venc." total={saldoIngreso - (monto > 0 ? monto : 0)} />}
       <ErrorBanner message={error} />
     </Modal>
   );

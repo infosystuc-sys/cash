@@ -1339,6 +1339,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      actualizar_deuda_cuota: {
+        Args: { p_cuota_id: number; p_fecha_vencimiento: string; p_importe: number }
+        Returns: undefined
+      }
       actualizar_ingreso: {
         Args: {
           p_cliente_id: number
@@ -1395,6 +1399,7 @@ export type Database = {
         Returns: undefined
       }
       eliminar_cheque: { Args: { p_cheque_id: number }; Returns: undefined }
+      eliminar_deuda_cuota: { Args: { p_cuota_id: number }; Returns: undefined }
       endosar_cheque: {
         Args: {
           p_categoria_egreso_id: number
@@ -1456,6 +1461,29 @@ export type Database = {
           p_medio: Database["public"]["Enums"]["medio_cobro"]
           p_tc?: number
           p_vencimiento_id: number
+        }
+        Returns: number
+      }
+      registrar_cobro_a_cuenta: {
+        Args: {
+          p_cuenta_id: number
+          p_fecha: string
+          p_importe: number
+          p_ingreso_id: number
+          p_medio: Database["public"]["Enums"]["medio_cobro"]
+          p_tc?: number
+        }
+        Returns: number
+      }
+      registrar_pago_deuda: {
+        Args: {
+          p_categoria_egreso_id: number
+          p_cuenta_id: number
+          p_deuda_id: number
+          p_fecha: string
+          p_importe: number
+          p_medio: Database["public"]["Enums"]["medio_pago"]
+          p_tc?: number
         }
         Returns: number
       }

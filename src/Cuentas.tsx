@@ -17,6 +17,7 @@ import {
   Pencil,
   Wallet,
   Trash2,
+  Search,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { useDetalle, tarjetaClickeable, type ColumnaDetalle } from "./components/Detalle";
@@ -47,6 +48,25 @@ const TIPOS_CUENTA: Record<string, string> = {
   efectivo: "Efectivo",
   billetera_digital: "Billetera Digital",
   custodia: "Custodia / Cofre",
+};
+
+const TIPOS_MOV: Record<string, string> = {
+  cobro: "Cobro",
+  egreso: "Egreso",
+  transferencia_salida: "Transf. enviada",
+  transferencia_entrada: "Transf. recibida",
+  deposito_cheque: "Depósito cheque",
+  rechazo_cheque: "Rechazo cheque",
+};
+
+const MEDIOS: Record<string, string> = {
+  transferencia: "Transferencia",
+  efectivo: "Efectivo",
+  deposito: "Depósito",
+  cheque: "Cheque",
+  debito_automatico: "Débito automático",
+  tarjeta: "Tarjeta",
+  cheque_endosado: "Cheque endosado",
 };
 
 export default function Cuentas() {
@@ -472,33 +492,73 @@ function AccountDetail({
   modal: React.ReactNode;
 }) {
   const [filtro, setFiltro] = useState<"todos" | "ingresos" | "egresos">("todos");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
+  const [busqueda, setBusqueda] = useState("");
   const moneda = cuenta.moneda as Moneda;
 
-  const { data, loading, error } = useData(
-    async () =>
-      check(
-        await supabase
-          .from("v_movimientos")
-          .select("*")
-          .eq("cuenta_id", cuenta.id!)
-          .gte("fecha", cuenta.fecha_saldo_inicial!)
-          .order("fecha")
-          .order("created_at"),
-      ),
-    [cuenta.id, cuenta.saldo],
-  );
+  const { data, loading, error } = useData(async () => {
+    const movs = check(
+      await supabase
+        .from("v_movimientos")
+        .select("*")
+        .eq("cuenta_id", cuenta.id!)
+        .gte("fecha", cuenta.fecha_saldo_inicial!)
+        .order("fecha")
+        .order("created_at"),
+    );
+    // El medio no está en la vista: se completa desde cobros y egresos
+    const ids = (origen: string) => movs.filter((m) => m.origen === origen).map((m) => m.origen_id!);
+    const [cobros, egresos] = await Promise.all([
+      ids("cobros").length ? supabase.from("cobros").select("id, medio").in("id", ids("cobros")) : null,
+      ids("egresos").length ? supabase.from("egresos").select("id, medio").in("id", ids("egresos")) : null,
+    ]);
+    const medios = new Map<string, string>();
+    (cobros ? check(cobros) : []).forEach((c) => medios.set(`cobros-${c.id}`, c.medio));
+    (egresos ? check(egresos) : []).forEach((e) => medios.set(`egresos-${e.id}`, e.medio));
+    return movs.map((m) => ({ ...m, medio: medios.get(`${m.origen}-${m.origen_id}`) ?? null }));
+  }, [cuenta.id, cuenta.saldo]);
 
-  // Saldo corrido (ascendente) y luego se muestra del más reciente al más viejo
-  const movimientos = useMemo(() => {
+  // Saldo corrido sobre todos los movimientos (ascendente); los filtros solo ocultan filas y se muestra del más reciente al más viejo
+  const conSaldo = useMemo(() => {
     let saldo = cuenta.saldo_inicial ?? 0;
-    const conSaldo = (data ?? []).map((m) => {
+    return (data ?? []).map((m) => {
       saldo += m.importe ?? 0;
       return { ...m, saldo };
     });
-    return conSaldo
-      .reverse()
-      .filter((m) => filtro === "todos" || (filtro === "ingresos" ? (m.importe ?? 0) > 0 : (m.importe ?? 0) < 0));
-  }, [data, filtro, cuenta.saldo_inicial]);
+  }, [data, cuenta.saldo_inicial]);
+
+  const movimientos = useMemo(() => {
+    const q = busqueda.toLowerCase().trim();
+    return [...conSaldo].reverse().filter((m) => {
+      if (filtro === "ingresos" && (m.importe ?? 0) <= 0) return false;
+      if (filtro === "egresos" && (m.importe ?? 0) >= 0) return false;
+      if (desde && (m.fecha ?? "") < desde) return false;
+      if (hasta && (m.fecha ?? "") > hasta) return false;
+      if (q && !`${m.concepto ?? ""} ${TIPOS_MOV[m.tipo ?? ""] ?? ""} ${MEDIOS[m.medio ?? ""] ?? ""}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [conSaldo, filtro, desde, hasta, busqueda]);
+
+  const totIngresos = movimientos.reduce((s, m) => s + Math.max(m.importe ?? 0, 0), 0);
+  const totEgresos = movimientos.reduce((s, m) => s + Math.min(m.importe ?? 0, 0), 0);
+  const hayFiltros = filtro !== "todos" || desde || hasta || busqueda;
+
+  function exportar() {
+    exportCsv(
+      `movimientos-${cuenta.nombre}-${hoyISO()}`,
+      [...movimientos].reverse().map((m) => ({
+        Fecha: fecha(m.fecha),
+        Tipo: TIPOS_MOV[m.tipo ?? ""] ?? m.tipo,
+        Concepto: m.concepto,
+        Medio: MEDIOS[m.medio ?? ""] ?? "",
+        Ingreso: (m.importe ?? 0) > 0 ? m.importe : "",
+        Egreso: (m.importe ?? 0) < 0 ? -(m.importe ?? 0) : "",
+        Saldo: m.saldo,
+        Moneda: moneda,
+      })),
+    );
+  }
 
   return (
     <div className="flex flex-col gap-8">
@@ -548,16 +608,74 @@ function AccountDetail({
 
       {/* Movements Table */}
       <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-2xl p-8 shadow-sm space-y-6">
-        <div className="flex items-center justify-between">
-          <Segmented
-            value={filtro}
-            onChange={setFiltro}
-            options={[
-              { value: "todos", label: `Todos (${data?.length ?? 0})` },
-              { value: "ingresos", label: "Ingresos" },
-              { value: "egresos", label: "Egresos" },
-            ]}
-          />
+        <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-primary">Movimientos de la cuenta</h2>
+            <p className="text-xs text-on-surface-variant">Cobros, egresos, transferencias y cheques depositados desde el saldo inicial.</p>
+          </div>
+          <button
+            onClick={exportar}
+            disabled={!movimientos.length}
+            className="self-start lg:self-auto inline-flex items-center gap-2 px-4 py-2 bg-surface-container-lowest text-on-surface text-xs font-bold rounded-lg border border-outline-variant/30 shadow-sm hover:bg-surface-container-low transition-colors disabled:opacity-50"
+          >
+            <Download className="w-4 h-4 text-outline" />
+            Exportar CSV
+          </button>
+        </div>
+
+        <div className="flex flex-col xl:flex-row xl:items-end gap-4">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-outline" />
+            <input
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              className={cn(inputCls, "pl-9")}
+              placeholder="Buscar por concepto, tipo o medio..."
+            />
+          </div>
+          <div className="flex items-end gap-3 flex-wrap">
+            <FormGroup label="Desde">
+              <input type="date" className={cn(inputCls, "w-40")} value={desde} onChange={(e) => setDesde(e.target.value)} />
+            </FormGroup>
+            <FormGroup label="Hasta">
+              <input type="date" className={cn(inputCls, "w-40")} value={hasta} onChange={(e) => setHasta(e.target.value)} />
+            </FormGroup>
+            <Segmented
+              value={filtro}
+              onChange={setFiltro}
+              options={[
+                { value: "todos", label: `Todos (${data?.length ?? 0})` },
+                { value: "ingresos", label: "Ingresos" },
+                { value: "egresos", label: "Egresos" },
+              ]}
+            />
+            {hayFiltros && (
+              <button
+                onClick={() => {
+                  setFiltro("todos");
+                  setDesde("");
+                  setHasta("");
+                  setBusqueda("");
+                }}
+                className="h-10 px-3 rounded-lg text-[11px] font-bold text-secondary hover:bg-secondary/5"
+              >
+                Limpiar
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-6 text-[11px] font-bold">
+          <span className="text-on-surface-variant">{movimientos.length} movimientos</span>
+          <span className="text-on-tertiary-container">
+            Ingresos <span className="font-numeric">{money(totIngresos, moneda)}</span>
+          </span>
+          <span className="text-error">
+            Egresos <span className="font-numeric">{money(totEgresos, moneda)}</span>
+          </span>
+          <span className="text-primary">
+            Neto <span className="font-numeric">{signedMoney(totIngresos + totEgresos, moneda)}</span>
+          </span>
         </div>
 
         <ErrorBanner message={error} />
@@ -569,18 +687,31 @@ function AccountDetail({
               <thead>
                 <tr className="bg-surface-container-low/50 text-[10px] font-bold text-outline uppercase tracking-widest border-b border-outline-variant/10">
                   <th className="py-3 px-4">Fecha</th>
+                  <th className="py-3 px-4">Tipo</th>
                   <th className="py-3 px-4">Concepto</th>
+                  <th className="py-3 px-4">Medio</th>
                   <th className="py-3 px-4 text-right">Ingreso (+)</th>
                   <th className="py-3 px-4 text-right">Egreso (-)</th>
                   <th className="py-3 px-4 text-right">Saldo</th>
                 </tr>
               </thead>
               <tbody className="text-xs divide-y divide-outline-variant/10">
-                {movimientos.length === 0 && <EmptyRow colSpan={5} label="Sin movimientos" />}
+                {movimientos.length === 0 && <EmptyRow colSpan={7} label={hayFiltros ? "Ningún movimiento coincide con los filtros" : "Sin movimientos"} />}
                 {movimientos.map((m) => (
                   <tr key={`${m.origen}-${m.origen_id}-${m.tipo}`} className="hover:bg-surface-container-low/50 transition-colors group">
-                    <td className="py-4 px-4 font-numeric text-outline font-medium">{fecha(m.fecha)}</td>
+                    <td className="py-4 px-4 font-numeric text-outline font-medium whitespace-nowrap">{fecha(m.fecha)}</td>
+                    <td className="py-4 px-4">
+                      <span
+                        className={cn(
+                          "px-2 py-0.5 rounded-full text-[9px] font-bold uppercase whitespace-nowrap",
+                          (m.importe ?? 0) >= 0 ? "bg-tertiary-container/10 text-on-tertiary-container" : "bg-error-container/20 text-error",
+                        )}
+                      >
+                        {TIPOS_MOV[m.tipo ?? ""] ?? m.tipo}
+                      </span>
+                    </td>
                     <td className="py-4 px-4 font-bold text-primary">{m.concepto}</td>
+                    <td className="py-4 px-4 text-on-surface-variant whitespace-nowrap">{MEDIOS[m.medio ?? ""] ?? "—"}</td>
                     <td className="py-4 px-4 text-right font-bold font-numeric text-on-tertiary-container">
                       {(m.importe ?? 0) > 0 ? signedMoney(m.importe!, moneda) : "—"}
                     </td>
@@ -670,7 +801,10 @@ function AccountCard({ cuenta, tc, onClick, onEdit }: { cuenta: Cuenta; tc: numb
           <span className="text-[8px] font-bold text-outline uppercase tracking-widest">Último Movimiento</span>
           <span className="text-[10px] text-on-surface font-bold truncate pr-4">{cuenta.ultimo_mov_concepto ?? "Sin movimientos"}</span>
         </div>
-        <ArrowRight className="w-4 h-4 text-secondary opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all shrink-0" />
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-secondary/5 text-[10px] font-bold text-secondary whitespace-nowrap shrink-0 group-hover:bg-secondary group-hover:text-on-secondary transition-colors">
+          Ver movimientos
+          <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+        </span>
       </div>
     </div>
   );

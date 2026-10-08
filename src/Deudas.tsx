@@ -29,10 +29,14 @@ import {
   EmptyRow,
   ErrorBanner,
   FormGroup,
+  ImputacionPreview,
   Loading,
   Modal,
+  ModoImputacionSelector,
   MoneyInput,
   Segmented,
+  repartir,
+  type ModoImputacion,
   SubmitButton,
   inputCls,
   selectCls,
@@ -436,6 +440,7 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
   const [filtro, setFiltro] = useState<"todas" | "pendientes">("todas");
   const [pagar, setPagar] = useState<Cuota | null>(null);
   const [editar, setEditar] = useState(false);
+  const [editarCuota, setEditarCuota] = useState<Cuota | null>(null);
 
   const { data, loading, error, reload } = useData(async () => {
     const [deuda, cuotas, pagos] = await Promise.all([
@@ -455,6 +460,8 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
   const proxima = pendientes[0];
   const progreso = porcentaje(d.pagado ?? 0, d.importe_total ?? 0);
   const filas = filtro === "todas" ? cuotas : pendientes;
+  const pagosPorCuota = new Map<number, number>();
+  pagos.forEach((p) => p.deuda_cuota_id && pagosPorCuota.set(p.deuda_cuota_id, (pagosPorCuota.get(p.deuda_cuota_id) ?? 0) + 1));
 
   async function eliminar() {
     if ((d.pagado ?? 0) > 0) return alert("No se puede eliminar una deuda con pagos registrados.");
@@ -462,6 +469,22 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
     const { error } = await supabase.from("deudas").delete().eq("id", d.id!);
     if (error) return alert(error.message);
     onBack();
+  }
+
+  async function eliminarCuota(q: Cuota) {
+    if ((q.pagado ?? 0) > 0) return alert("No se puede eliminar una cuota con pagos registrados.");
+    if (cuotas.length === 1) return alert("Es la única cuota de la deuda: eliminá la deuda completa.");
+    const nuevoTotal = (d.importe_total ?? 0) - (q.importe ?? 0);
+    if (
+      !confirm(
+        `¿Eliminar la cuota #${q.numero} (vence ${fecha(q.fecha_vencimiento)}, ${money(q.importe, moneda)})?\n\n` +
+          `El total de la deuda pasa de ${money(d.importe_total, moneda)} a ${money(nuevoTotal, moneda)}.`,
+      )
+    )
+      return;
+    const { error } = await supabase.rpc("eliminar_deuda_cuota", { p_cuota_id: q.id! });
+    if (error) alert(error.message);
+    reload();
   }
 
   return (
@@ -574,7 +597,7 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-bold text-primary">Cronograma de Cuotas</h2>
-                <p className="text-xs text-on-surface-variant">Desglose secuencial de vencimientos e imputaciones</p>
+                <p className="text-xs text-on-surface-variant">Desglose de vencimientos e imputaciones. Al modificar o eliminar un vencimiento se recalcula el total.</p>
               </div>
               <Segmented
                 value={filtro}
@@ -593,7 +616,9 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
                     <th className="pb-4 px-2">Cuota</th>
                     <th className="pb-4 px-2">Vencimiento</th>
                     <th className="pb-4 px-2 text-right">Importe</th>
-                    <th className="pb-4 px-2">Fecha Pago</th>
+                    <th className="pb-4 px-2 text-right">Pagado</th>
+                    <th className="pb-4 px-2 text-right">Saldo</th>
+                    <th className="pb-4 px-2">Últ. Pago</th>
                     <th className="pb-4 px-2">Cuenta</th>
                     <th className="pb-4 px-2 text-center">Estado</th>
                     <th className="pb-4 px-2 text-right"></th>
@@ -622,9 +647,13 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
                             {(q.saldo ?? 0) > 0 && <span className="text-[9px] text-secondary font-medium">{textoVencimiento(q.fecha_vencimiento)}</span>}
                           </div>
                         </td>
-                        <td className="py-4 px-2 text-right font-bold font-numeric text-on-surface">
-                          {money(q.importe, moneda)}
-                          {q.estado === "parcial" && <div className="text-[9px] text-on-surface-variant">saldo {money(q.saldo, moneda)}</div>}
+                        <td className="py-4 px-2 text-right font-bold font-numeric text-on-surface">{money(q.importe, moneda)}</td>
+                        <td className="py-4 px-2 text-right font-numeric text-on-tertiary-container">
+                          {(q.pagado ?? 0) > 0 ? money(q.pagado, moneda) : "—"}
+                          {(pagosPorCuota.get(q.id!) ?? 0) > 1 && <div className="text-[9px] text-on-surface-variant">{pagosPorCuota.get(q.id!)} pagos</div>}
+                        </td>
+                        <td className={cn("py-4 px-2 text-right font-bold font-numeric", (q.saldo ?? 0) > 0 ? "text-primary" : "text-outline")}>
+                          {(q.saldo ?? 0) > 0 ? money(q.saldo, moneda) : "—"}
                         </td>
                         <td className="py-4 px-2 font-numeric text-outline">{fecha(q.fecha_pago)}</td>
                         <td className="py-4 px-2">
@@ -644,11 +673,32 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
                             {ESTADO_LABEL[q.estado ?? ""]}
                           </span>
                         </td>
-                        <td className="py-4 px-2 text-right">
+                        <td className="py-4 px-2 text-right whitespace-nowrap">
+                          <button
+                            onClick={() => setEditarCuota(q)}
+                            title="Modificar vencimiento"
+                            className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors align-middle"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => eliminarCuota(q)}
+                            disabled={(q.pagado ?? 0) > 0 || cuotas.length === 1}
+                            title={
+                              (q.pagado ?? 0) > 0
+                                ? "No se puede eliminar: tiene pagos registrados"
+                                : cuotas.length === 1
+                                  ? "Es la única cuota: eliminá la deuda"
+                                  : "Eliminar vencimiento"
+                            }
+                            className="p-1.5 mr-1 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors disabled:opacity-30 disabled:hover:text-outline disabled:hover:bg-transparent disabled:cursor-not-allowed align-middle"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                           {(q.saldo ?? 0) > 0 && (
                             <button
                               onClick={() => setPagar(q)}
-                              className="px-3 py-1 bg-secondary text-on-secondary rounded-lg text-[10px] font-bold hover:bg-secondary-container transition-all"
+                              className="px-3 py-1 bg-secondary text-on-secondary rounded-lg text-[10px] font-bold hover:bg-secondary-container transition-all align-middle"
                             >
                               Pagar
                             </button>
@@ -681,17 +731,21 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
             </h3>
             {pagos.length === 0 && <p className="text-xs text-outline">Todavía no hay pagos.</p>}
             <div className="space-y-4">
-              {pagos.map((p) => (
+              {pagos.map((p) => {
+                const q = cuotas.find((c) => c.id === p.deuda_cuota_id);
+                const parcial = q != null && (p.importe ?? 0) < (q.importe ?? 0);
+                return (
                 <div key={p.id} className="pl-4 border-l-2 border-on-tertiary-container/40 space-y-0.5">
                   <div className="text-[9px] font-bold text-on-tertiary-container uppercase tracking-wider">{fecha(p.fecha)}</div>
                   <div className="text-xs font-bold text-primary">
-                    Cuota {p.cuota_numero}/{cuotas.length} imputada
+                    {parcial ? "Pago parcial" : "Pago"} cuota {p.cuota_numero}/{cuotas.length}
                   </div>
                   <p className="text-[11px] text-on-surface-variant">
                     {p.medio === "cheque_endosado" ? `Cheque #${p.cheque_numero} endosado` : `Vía ${p.cuenta}`} por {money(p.importe, p.moneda as Moneda)}
                   </p>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -726,10 +780,21 @@ function DebtDetail({ deudaId, onBack }: { deudaId: number; onBack: () => void }
         <PagoCuotaModal
           deuda={d}
           cuota={pagar}
-          totalCuotas={cuotas.length}
+          cuotas={cuotas}
           onClose={() => setPagar(null)}
           onSaved={() => {
             setPagar(null);
+            reload();
+          }}
+        />
+      )}
+      {editarCuota && (
+        <CuotaModal
+          deuda={d}
+          cuota={editarCuota}
+          onClose={() => setEditarCuota(null)}
+          onSaved={() => {
+            setEditarCuota(null);
             reload();
           }}
         />
@@ -792,22 +857,86 @@ function DetailStatCard({
 }
 
 // ---------------------------------------------------------------------------
-// Pago de cuota (crea un egreso imputado)
+// Modificar un vencimiento (el total de la deuda pasa a ser la suma de las cuotas)
+// ---------------------------------------------------------------------------
+
+function CuotaModal({ deuda, cuota, onClose, onSaved }: { deuda: Deuda; cuota: Cuota; onClose: () => void; onSaved: () => void }) {
+  const moneda = deuda.moneda as Moneda;
+  const [fechaV, setFechaV] = useState(cuota.fecha_vencimiento ?? "");
+  const [importe, setImporte] = useState(cuota.importe ?? NaN);
+  const { saving, error, setError, run } = useSubmit();
+  const pagado = cuota.pagado ?? 0;
+  const nuevoTotal = Math.round(((deuda.importe_total ?? 0) - (cuota.importe ?? 0) + (Number.isFinite(importe) ? importe : 0)) * 100) / 100;
+
+  const guardar = () =>
+    run(async () => {
+      if (!fechaV) return setError("Indicá la fecha de vencimiento");
+      if (!(importe > 0)) return setError("Ingresá el importe");
+      if (importe < pagado) return setError(`No puede ser menor a lo ya pagado (${money(pagado, moneda)})`);
+      check(await supabase.rpc("actualizar_deuda_cuota", { p_cuota_id: cuota.id!, p_fecha_vencimiento: fechaV, p_importe: importe }));
+      onSaved();
+    });
+
+  return (
+    <Modal
+      title={`Modificar Cuota #${cuota.numero}`}
+      subtitle={`${deuda.proveedor} • ${deuda.concepto}`}
+      icon={<Pencil className="w-6 h-6" />}
+      onClose={onClose}
+      size="max-w-lg"
+      footer={
+        <>
+          <CancelButton onClick={onClose} />
+          <SubmitButton onClick={guardar} saving={saving}>
+            <CheckCircle className="w-4 h-4" />
+            Guardar
+          </SubmitButton>
+        </>
+      }
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <FormGroup label="Vencimiento *">
+          <input type="date" className={inputCls} value={fechaV} onChange={(e) => setFechaV(e.target.value)} />
+        </FormGroup>
+        <FormGroup label={`Importe * (${moneda})`}>
+          <MoneyInput value={importe} onChange={setImporte} prefix={moneda === "USD" ? "U$S" : "$"} />
+          {pagado > 0 && <span className="text-[10px] font-bold text-on-tertiary-container">Ya pagado {money(pagado, moneda)} (mínimo)</span>}
+        </FormGroup>
+      </div>
+      <div className="p-4 rounded-xl bg-surface-container-low/50 border border-outline-variant/10 flex items-center justify-between text-[11px]">
+        <span>
+          Total de la deuda: <strong className="font-numeric">{money(deuda.importe_total, moneda)}</strong>
+        </span>
+        <span className={cn("font-bold", nuevoTotal === deuda.importe_total ? "text-on-surface-variant" : "text-secondary")}>
+          Nuevo total: <span className="font-numeric">{money(nuevoTotal, moneda)}</span>
+        </span>
+      </div>
+      <p className="text-[11px] text-on-surface-variant">Las demás cuotas no cambian. Si modificás la fecha, las cuotas se renumeran por orden de vencimiento.</p>
+      <ErrorBanner message={error} />
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pago de cuota (crea un egreso imputado; "a cuenta" lo reparte entre varias cuotas)
 // ---------------------------------------------------------------------------
 
 export function PagoCuotaModal({
   deuda,
   cuota,
-  totalCuotas,
+  cuotas,
   onClose,
   onSaved,
 }: {
   deuda: Deuda;
   cuota: Cuota;
-  totalCuotas: number;
+  /** Todas las cuotas de la deuda (para elegir otra o repartir un pago a cuenta) */
+  cuotas: Cuota[];
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const totalCuotas = cuotas.length;
+  const pendientes = cuotas.filter((q) => (q.saldo ?? 0) > 0);
   const moneda = deuda.moneda as Moneda;
   const { data: cat } = useData(async () => {
     const [cuentas, categorias, tc] = await Promise.all([
@@ -819,7 +948,9 @@ export function PagoCuotaModal({
   });
 
   const [fechaP, setFechaP] = useState(hoyISO());
-  const [importe, setImporte] = useState(cuota.saldo ?? NaN);
+  const [modo, setModo] = useState<ModoImputacion>("total");
+  const [cuotaId, setCuotaId] = useState(cuota.id!);
+  const [importe, setImporte] = useState(NaN);
   const [cuentaId, setCuentaId] = useState("");
   const [medio, setMedio] = useState<"transferencia" | "debito_automatico" | "efectivo" | "tarjeta">("transferencia");
   const [categoriaId, setCategoriaId] = useState(deuda.categoria_egreso_id ? String(deuda.categoria_egreso_id) : "");
@@ -834,34 +965,55 @@ export function PagoCuotaModal({
   const cuenta = cat?.cuentas.find((c) => String(c.id) === cuentaId);
   const necesitaTc = moneda === "USD" || (cuenta && cuenta.moneda !== moneda);
 
+  const sel = pendientes.find((q) => q.id === cuotaId) ?? cuota;
+  const saldoDeuda = pendientes.reduce((s, q) => s + (q.saldo ?? 0), 0);
+  const monto = modo === "total" ? sel.saldo ?? 0 : importe;
+  const reparto = modo === "cuenta" ? repartir(monto, pendientes) : [];
+
   const guardar = () =>
     run(async () => {
-      if (!(importe > 0)) return setError("Ingresá el importe");
-      if (importe > (cuota.saldo ?? 0)) return setError(`Supera el saldo de la cuota (${money(cuota.saldo, moneda)})`);
+      if (!(monto > 0)) return setError("Ingresá el importe");
+      if (modo === "parcial" && monto >= (sel.saldo ?? 0))
+        return setError(`Un pago parcial debe ser menor al saldo de la cuota (${money(sel.saldo, moneda)}). Para cancelarla elegí "Total".`);
+      if (modo === "cuenta" && monto > saldoDeuda) return setError(`Supera el saldo pendiente de la deuda (${money(saldoDeuda, moneda)})`);
       if (!cuenta) return setError("Elegí la cuenta de origen");
       if (!categoriaId) return setError("Elegí la categoría");
       if (necesitaTc && !(tc > 0)) return setError("Indicá el tipo de cambio");
-      check(
-        await supabase.from("egresos").insert({
-          fecha: fechaP,
-          categoria_egreso_id: Number(categoriaId),
-          proveedor_id: deuda.proveedor_id,
-          concepto: `${deuda.concepto} - Cuota ${cuota.numero}/${totalCuotas}`,
-          moneda,
-          importe,
-          tc: necesitaTc ? tc : null,
-          medio,
-          cuenta_id: cuenta.id,
-          deuda_cuota_id: cuota.id,
-        }),
-      );
+      if (modo === "cuenta") {
+        check(
+          await supabase.rpc("registrar_pago_deuda", {
+            p_deuda_id: deuda.id!,
+            p_fecha: fechaP,
+            p_importe: monto,
+            p_medio: medio,
+            p_cuenta_id: cuenta.id,
+            p_categoria_egreso_id: Number(categoriaId),
+            p_tc: necesitaTc ? tc : undefined,
+          }),
+        );
+      } else {
+        check(
+          await supabase.from("egresos").insert({
+            fecha: fechaP,
+            categoria_egreso_id: Number(categoriaId),
+            proveedor_id: deuda.proveedor_id,
+            concepto: `${deuda.concepto} - Cuota ${sel.numero}/${totalCuotas}${modo === "parcial" ? " (parcial)" : ""}`,
+            moneda,
+            importe: monto,
+            tc: necesitaTc ? tc : null,
+            medio,
+            cuenta_id: cuenta.id,
+            deuda_cuota_id: sel.id,
+          }),
+        );
+      }
       onSaved();
     });
 
   return (
     <Modal
-      title="Registrar Pago de Cuota"
-      subtitle={`${deuda.proveedor} • Cuota ${cuota.numero}/${totalCuotas} • vence ${fecha(cuota.fecha_vencimiento)}`}
+      title="Registrar Pago"
+      subtitle={`${deuda.proveedor} • ${deuda.concepto} • saldo ${money(saldoDeuda, moneda)}`}
       icon={<CreditCard className="w-6 h-6" />}
       onClose={onClose}
       footer={
@@ -874,12 +1026,35 @@ export function PagoCuotaModal({
         </>
       }
     >
+      <ModoImputacionSelector value={modo} onChange={setModo} etiqueta="cuota" cuentaDeshabilitada={pendientes.length < 2} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        {modo !== "cuenta" && (
+          <FormGroup label="Cuota *" className="sm:col-span-2">
+            <select className={selectCls} value={sel.id!} onChange={(e) => setCuotaId(Number(e.target.value))}>
+              {pendientes.map((q) => (
+                <option key={q.id} value={q.id!}>
+                  Cuota #{q.numero}/{totalCuotas} • vence {fecha(q.fecha_vencimiento)} • saldo {money(q.saldo, moneda)}
+                  {q.estado === "parcial" && " (pago parcial previo)"}
+                </option>
+              ))}
+            </select>
+          </FormGroup>
+        )}
         <FormGroup label="Fecha de pago *">
           <input type="date" className={inputCls} value={fechaP} onChange={(e) => setFechaP(e.target.value)} />
         </FormGroup>
         <FormGroup label={`Importe * (${moneda})`}>
-          <MoneyInput value={importe} onChange={setImporte} prefix={moneda === "USD" ? "U$S" : "$"} />
+          {modo === "total" ? (
+            <div className="h-10 px-3 rounded-lg bg-surface-container-low flex items-center justify-end text-xs font-bold font-numeric text-primary">
+              {money(monto, moneda)}
+            </div>
+          ) : (
+            <MoneyInput value={importe} onChange={setImporte} prefix={moneda === "USD" ? "U$S" : "$"} />
+          )}
+          {modo === "parcial" && monto > 0 && monto < (sel.saldo ?? 0) && (
+            <span className="text-[10px] font-bold text-secondary">Queda saldo en la cuota: {money((sel.saldo ?? 0) - monto, moneda)}</span>
+          )}
+          {modo === "cuenta" && <span className="text-[10px] text-on-surface-variant">Máximo {money(saldoDeuda, moneda)}</span>}
         </FormGroup>
         <FormGroup label="Medio de pago *">
           <select className={selectCls} value={medio} onChange={(e) => setMedio(e.target.value as typeof medio)}>
@@ -914,14 +1089,15 @@ export function PagoCuotaModal({
           </FormGroup>
         )}
       </div>
-      {necesitaTc && cuenta && Number.isFinite(importe) && tc > 0 && (
+      {necesitaTc && cuenta && Number.isFinite(monto) && tc > 0 && (
         <p className="text-[11px] text-on-surface-variant">
           Débito en {cuenta.nombre}:{" "}
           <strong className="font-numeric">
-            {cuenta.moneda === moneda ? money(importe, moneda) : cuenta.moneda === "ARS" ? money(importe * tc) : money(importe / tc, "USD")}
+            {cuenta.moneda === moneda ? money(monto, moneda) : cuenta.moneda === "ARS" ? money(monto * tc) : money(monto / tc, "USD")}
           </strong>
         </p>
       )}
+      {modo === "cuenta" && <ImputacionPreview items={reparto} moneda={moneda} etiqueta="Cuota" total={saldoDeuda - (monto > 0 ? monto : 0)} />}
       <ErrorBanner message={error} />
     </Modal>
   );

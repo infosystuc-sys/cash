@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { X, AlertCircle, Loader2 } from "lucide-react";
 import { cn } from "../lib/utils";
-import { number as fmtNumber, parseNumber } from "../lib/format";
+import { number as fmtNumber, parseNumber, fecha, money, type Moneda } from "../lib/format";
 
 export const inputCls =
   "w-full h-10 px-3 rounded-lg bg-surface-container-low border-0 text-xs font-medium focus:ring-2 focus:ring-secondary/20 outline-none";
@@ -237,6 +237,108 @@ export function Segmented<T extends string>({
           {o.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Imputación de pagos/cobros: total, parcial o a cuenta (repartido entre cuotas)
+// ---------------------------------------------------------------------------
+
+export type ModoImputacion = "total" | "parcial" | "cuenta";
+
+type Partida = { id: number | null; numero: number | null; fecha_vencimiento: string | null; saldo: number | null };
+
+/** Reparte un importe entre las partidas con saldo, de la que vence primero a la última (mismo orden que en la base). */
+export function repartir<T extends Partida>(importe: number, partidas: T[]) {
+  const orden = [...partidas]
+    .filter((p) => (p.saldo ?? 0) > 0)
+    .sort((a, b) => (a.fecha_vencimiento ?? "").localeCompare(b.fecha_vencimiento ?? "") || (a.numero ?? 0) - (b.numero ?? 0));
+  let resto = Number.isFinite(importe) ? importe : 0;
+  const out: { partida: T; imputa: number; queda: number }[] = [];
+  for (const p of orden) {
+    if (resto <= 0) break;
+    const imputa = Math.min(resto, p.saldo ?? 0);
+    out.push({ partida: p, imputa, queda: Math.round(((p.saldo ?? 0) - imputa) * 100) / 100 });
+    resto = Math.round((resto - imputa) * 100) / 100;
+  }
+  return out;
+}
+
+/** Selector Total / Parcial / A cuenta con la explicación del modo elegido. */
+export function ModoImputacionSelector({
+  value,
+  onChange,
+  etiqueta,
+  cuentaDeshabilitada,
+}: {
+  value: ModoImputacion;
+  onChange: (m: ModoImputacion) => void;
+  /** "cuota" o "vencimiento" */
+  etiqueta: string;
+  /** Oculta la opción "A cuenta" (p.ej. si queda una sola partida pendiente) */
+  cuentaDeshabilitada?: boolean;
+}) {
+  const ayuda: Record<ModoImputacion, string> = {
+    total: `Se cancela el saldo completo de la ${etiqueta} elegida.`,
+    parcial: `Se imputa una parte; la ${etiqueta} queda con saldo pendiente.`,
+    cuenta: `Ingresás un importe libre y se reparte entre las ${etiqueta}s pendientes, empezando por la que vence primero.`,
+  };
+  return (
+    <div className="space-y-2">
+      <Segmented
+        value={value}
+        onChange={onChange}
+        options={[
+          { value: "total" as ModoImputacion, label: `Total de la ${etiqueta}` },
+          { value: "parcial" as ModoImputacion, label: "Parcial" },
+          ...(cuentaDeshabilitada ? [] : [{ value: "cuenta" as ModoImputacion, label: `A cuenta (varias ${etiqueta}s)` }]),
+        ]}
+      />
+      <p className="text-[11px] text-on-surface-variant">{ayuda[value]}</p>
+    </div>
+  );
+}
+
+/** Detalle de cómo queda imputado el importe en cada cuota/vencimiento. */
+export function ImputacionPreview<T extends Partida>({
+  items,
+  moneda,
+  etiqueta,
+  total,
+}: {
+  items: { partida: T; imputa: number; queda: number }[];
+  moneda: Moneda;
+  etiqueta: string;
+  total: number;
+}) {
+  if (!items.length) return null;
+  return (
+    <div className="p-4 rounded-xl bg-surface-container-low/50 border border-outline-variant/10 space-y-2">
+      <span className="text-[10px] font-bold text-secondary uppercase tracking-widest">Imputación</span>
+      <table className="w-full text-left text-xs">
+        <thead>
+          <tr className="text-[10px] font-bold text-outline uppercase tracking-widest border-b border-outline-variant/10">
+            <th className="py-1.5">{etiqueta}</th>
+            <th className="py-1.5">Vencimiento</th>
+            <th className="py-1.5 text-right">Imputa</th>
+            <th className="py-1.5 text-right">Queda</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-outline-variant/10">
+          {items.map(({ partida, imputa, queda }) => (
+            <tr key={partida.id}>
+              <td className="py-1.5 font-bold text-on-surface-variant">#{partida.numero}</td>
+              <td className="py-1.5 font-numeric">{fecha(partida.fecha_vencimiento)}</td>
+              <td className="py-1.5 text-right font-numeric font-bold text-primary">{money(imputa, moneda)}</td>
+              <td className={cn("py-1.5 text-right font-numeric font-bold", queda > 0 ? "text-secondary" : "text-on-tertiary-container")}>
+                {queda > 0 ? `${money(queda, moneda)} (parcial)` : "Sin saldo"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {total > 0 && <p className="text-[11px] text-on-surface-variant">Saldo total pendiente después del pago: <strong className="font-numeric">{money(total, moneda)}</strong></p>}
     </div>
   );
 }
