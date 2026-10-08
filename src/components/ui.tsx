@@ -258,3 +258,66 @@ export function useSubmit() {
   }
   return { saving, error, setError, run };
 }
+
+// ---------------------------------------------------------------------------
+// Ordenamiento de tablas por columna
+// ---------------------------------------------------------------------------
+
+export type Orden<K extends string> = { columna: K; asc: boolean } | null;
+
+/**
+ * Ordena `filas` según la columna elegida. `valores` devuelve, para cada columna, el valor a comparar
+ * (texto o número). Los null/undefined quedan siempre al final. Con orden null se respeta el orden original.
+ */
+export function useOrden<T, K extends string>(filas: T[], valores: Record<K, (f: T) => string | number | null | undefined>) {
+  const [orden, setOrden] = useState<Orden<K>>(null);
+
+  const ordenadas = React.useMemo(() => {
+    if (!orden) return filas;
+    const val = valores[orden.columna];
+    return [...filas].sort((a, b) => {
+      const va = val(a);
+      const vb = val(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      const cmp = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb), "es", { sensitivity: "base", numeric: true });
+      return orden.asc ? cmp : -cmp;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filas, orden]);
+
+  /** Primer click: ascendente; siguiente click sobre la misma columna: invierte. */
+  const ordenarPor = (columna: K) => setOrden((o) => (o?.columna === columna ? { columna, asc: !o.asc } : { columna, asc: true }));
+
+  return { ordenadas, orden, ordenarPor };
+}
+
+/** Encabezado de tabla clickeable que muestra la flecha del orden activo. */
+export function ThOrden<K extends string>({
+  columna,
+  orden,
+  onOrdenar,
+  children,
+  className,
+}: {
+  columna: K;
+  orden: Orden<K>;
+  onOrdenar: (c: K) => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const activa = orden?.columna === columna;
+  return (
+    <th
+      onClick={() => onOrdenar(columna)}
+      title="Ordenar por esta columna"
+      className={cn("cursor-pointer select-none hover:text-primary transition-colors", activa && "text-primary", className)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {children}
+        <span className={cn("text-[9px]", activa ? "opacity-100" : "opacity-0")}>{activa && !orden!.asc ? "▼" : "▲"}</span>
+      </span>
+    </th>
+  );
+}

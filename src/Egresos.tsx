@@ -22,6 +22,8 @@ import {
   inputCls,
   selectCls,
   useSubmit,
+  useOrden,
+  ThOrden,
 } from "./components/ui";
 
 type Egreso = Row<"v_egresos">;
@@ -112,6 +114,16 @@ export default function Egresos() {
     if (categoriaId && String(e.categoria_egreso_id) !== categoriaId) return false;
     if (q && !`${e.concepto} ${e.proveedor ?? ""}`.toLowerCase().includes(q)) return false;
     return true;
+  });
+
+  // Orden por columna (click en el encabezado). Importe comparado en ARS.
+  const { ordenadas, orden, ordenarPor } = useOrden(filas, {
+    fecha: (e) => e.fecha,
+    concepto: (e) => e.concepto,
+    categoria: (e) => e.categoria,
+    importe: (e) => e.importe_ars,
+    medio: (e) => `${MEDIO_LABEL[e.medio ?? ""] ?? ""} ${e.medio === "cheque_endosado" ? e.cheque_numero ?? "" : e.cuenta ?? ""}`,
+    deuda: (e) => (e.deuda_id ? codigoDeuda(e.deuda_id) : null),
   });
 
   async function eliminar(e: Egreso) {
@@ -264,18 +276,18 @@ export default function Egresos() {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-surface-container-low/50 text-[10px] font-bold text-on-surface-variant uppercase tracking-widest border-b border-outline-variant/10">
-                  <th className="px-6 py-4">Fecha</th>
-                  <th className="px-4 py-4">Concepto / Detalle</th>
-                  <th className="px-4 py-4">Categoría</th>
-                  <th className="px-4 py-4 text-right">Importe</th>
-                  <th className="px-4 py-4 text-center">Medio de Pago</th>
-                  <th className="px-4 py-4">Deuda</th>
+                  <ThOrden columna="fecha" orden={orden} onOrdenar={ordenarPor} className="px-6 py-4">Fecha</ThOrden>
+                  <ThOrden columna="concepto" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4">Concepto / Detalle</ThOrden>
+                  <ThOrden columna="categoria" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4">Categoría</ThOrden>
+                  <ThOrden columna="importe" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-right">Importe</ThOrden>
+                  <ThOrden columna="medio" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-center">Medio de Pago</ThOrden>
+                  <ThOrden columna="deuda" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4">Deuda</ThOrden>
                   <th className="px-4 py-4"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-outline-variant/10 text-xs">
                 {filas.length === 0 && <EmptyRow colSpan={7} label="Sin egresos" />}
-                {filas.map((e) => (
+                {ordenadas.map((e) => (
                   <tr key={e.id} className={cn("hover:bg-surface-container-low/50 transition-colors group", e.deuda_id && "border-l-4 border-secondary")}>
                     <td className="px-6 py-4 font-numeric font-medium text-on-surface whitespace-nowrap">{fecha(e.fecha)}</td>
                     <td className="px-4 py-4">

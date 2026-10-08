@@ -37,6 +37,8 @@ import {
   inputCls,
   selectCls,
   useSubmit,
+  useOrden,
+  ThOrden,
 } from "./components/ui";
 
 type Ingreso = Row<"v_ingresos">;
@@ -167,6 +169,18 @@ export default function Ingresos() {
     if (estado === "cobrados") return i.estado === "cobrado";
     if (estado === "vencidos") return i.estado === "vencido";
     return true;
+  });
+
+  // Orden por columna (click en el encabezado). Importes comparados en ARS.
+  const { ordenadas, orden, ordenarPor } = useOrden(filas, {
+    cliente: (i) => i.cliente,
+    tipo: (i) => i.tipo_ingreso,
+    descripcion: (i) => i.descripcion,
+    fecha: (i) => i.fecha_factura,
+    moneda: (i) => i.moneda,
+    importe: (i) => ars(i, i.importe_total),
+    vencimiento: (i) => i.proximo_vencimiento,
+    estado: (i) => ESTADO_LABEL[i.estado ?? ""],
   });
 
   const kpi = useMemo(() => {
@@ -441,20 +455,20 @@ export default function Ingresos() {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-surface-container-low/50 text-[10px] font-bold text-outline uppercase tracking-widest border-b border-outline-variant/10">
-                  <th className="px-6 py-4">Cliente</th>
-                  <th className="px-4 py-4">Tipo Ingreso</th>
-                  <th className="px-4 py-4 min-w-[280px]">Descripción</th>
-                  <th className="px-4 py-4 text-center">Fecha Factura</th>
-                  <th className="px-4 py-4 text-center">Moneda</th>
-                  <th className="px-4 py-4 text-right">Importe Total</th>
-                  <th className="px-4 py-4 text-center">Próx. Vencimiento</th>
-                  <th className="px-4 py-4 text-center">Estado</th>
+                  <ThOrden columna="cliente" orden={orden} onOrdenar={ordenarPor} className="px-6 py-4">Cliente</ThOrden>
+                  <ThOrden columna="tipo" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4">Tipo Ingreso</ThOrden>
+                  <ThOrden columna="descripcion" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 min-w-[280px]">Descripción</ThOrden>
+                  <ThOrden columna="fecha" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-center">Fecha Factura</ThOrden>
+                  <ThOrden columna="moneda" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-center">Moneda</ThOrden>
+                  <ThOrden columna="importe" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-right">Importe Total</ThOrden>
+                  <ThOrden columna="vencimiento" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-center">Próx. Vencimiento</ThOrden>
+                  <ThOrden columna="estado" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-center">Estado</ThOrden>
                   <th className="px-6 py-4 text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-outline-variant/10 text-xs">
                 {filas.length === 0 && <EmptyRow colSpan={9} label="No hay ingresos para los filtros elegidos" />}
-                {filas.map((i) => (
+                {ordenadas.map((i) => (
                   <React.Fragment key={i.id}>
                     <InvoiceRow
                       ingreso={i}
