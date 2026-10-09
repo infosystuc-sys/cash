@@ -7,6 +7,7 @@ import { useData } from "./lib/useData";
 import { fecha, fechaCorta, hoyISO, money, signedMoney, sumarDias, sumarMeses, type Moneda } from "./lib/format";
 import { ErrorBanner, Loading, Segmented } from "./components/ui";
 import { useDetalle, tarjetaClickeable, type ColumnaDetalle } from "./components/Detalle";
+import { ReporteVentas } from "./components/ReporteVentas";
 
 type Periodo = "day" | "week" | "month";
 
@@ -617,6 +618,8 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {data && <ReporteVentas tc={data.tc} />}
     </div>
   );
 }

@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check } from "./lib/supabase";
@@ -38,6 +39,8 @@ const structure = [
   // Con acceso libre no hay login, así que la lista de autorizados no aplica
   ...(ACCESO_LIBRE ? [] : [{ name: "Usuarios", path: "/usuarios", icon: ShieldCheck }]),
 ];
+
+const sistema = [{ name: "Configuración", path: "/configuracion", icon: Settings }];
 
 type Item = { name: string; path: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -113,6 +116,7 @@ export function Sidebar({ colapsado, onToggle }: { colapsado: boolean; onToggle:
       <nav className={cn("flex-1 py-4 space-y-6 overflow-y-auto", colapsado ? "px-2" : "px-3")}>
         <NavLinks titulo="Operaciones" items={navigation} colapsado={colapsado} />
         <NavLinks titulo="Estructura" items={structure} colapsado={colapsado} />
+        <NavLinks titulo="Sistema" items={sistema} colapsado={colapsado} />
       </nav>
 
       <div className={cn("mt-auto", colapsado ? "p-2 flex justify-center" : "p-4")}>

@@ -13,6 +13,7 @@ import Cuentas from "./Cuentas";
 import Clientes from "./Clientes";
 import Proveedores from "./Proveedores";
 import Usuarios from "./Usuarios";
+import Configuracion from "./Configuracion";
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
             <Route path="/clientes" element={<Clientes />} />
             <Route path="/proveedores" element={<Proveedores />} />
             {!ACCESO_LIBRE && <Route path="/usuarios" element={<Usuarios />} />}
+            <Route path="/configuracion" element={<Configuracion />} />
           </Routes>
         </Layout>
       </Router>

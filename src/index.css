@@ -90,3 +90,8 @@
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-outline);
 }
+
+/* Textura para distinguir series sin depender solo del color (p.ej. ventas históricas en el reporte) */
+.rayado {
+  background-image: repeating-linear-gradient(45deg, var(--color-secondary) 0 2px, transparent 2px 6px);
+}

@@ -836,8 +836,62 @@ export type Database = {
         }
         Relationships: []
       }
+      ventas_historicas: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: number
+          importe: number
+          mes: string
+          moneda: Database["public"]["Enums"]["moneda"]
+          notas: string | null
+          tipo_ingreso_id: number
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: never
+          importe: number
+          mes: string
+          moneda?: Database["public"]["Enums"]["moneda"]
+          notas?: string | null
+          tipo_ingreso_id: number
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: never
+          importe?: number
+          mes?: string
+          moneda?: Database["public"]["Enums"]["moneda"]
+          notas?: string | null
+          tipo_ingreso_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ventas_historicas_tipo_ingreso_id_fkey"
+            columns: ["tipo_ingreso_id"]
+            isOneToOne: false
+            referencedRelation: "tipos_ingreso"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
+      v_ventas_mensuales: {
+        Row: {
+          cobrado: number | null
+          facturas: number | null
+          importe: number | null
+          mes: string | null
+          moneda: Database["public"]["Enums"]["moneda"] | null
+          origen: string | null
+          tipo_ingreso: string | null
+          tipo_ingreso_id: number | null
+        }
+        Relationships: []
+      }
       v_categorias_egreso: {
         Row: {
           activa: boolean | null
@@ -1359,6 +1413,10 @@ export type Database = {
       }
       cambiar_vencimiento: {
         Args: { p_fecha: string; p_id: number; p_origen: string }
+        Returns: undefined
+      }
+      configurar_saldos_iniciales: {
+        Args: { p_fecha: string; p_saldos: Json }
         Returns: undefined
       }
       convertir: {
