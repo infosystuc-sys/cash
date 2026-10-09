@@ -694,7 +694,7 @@ function CeldaDetalle({ children, className, onClick }: { children: React.ReactN
     <td
       onClick={onClick}
       title="Ver composición"
-      className={cn("px-4 py-4 text-right font-numeric cursor-pointer hover:underline decoration-dotted underline-offset-4 hover:bg-surface-container-low", className)}
+      className={cn("px-4 py-4 text-right font-numeric whitespace-nowrap cursor-pointer hover:underline decoration-dotted underline-offset-4 hover:bg-surface-container-low", className)}
     >
       {children}
     </td>

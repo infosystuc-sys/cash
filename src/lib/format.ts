@@ -2,11 +2,11 @@ const nf = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFra
 
 export type Moneda = "ARS" | "USD";
 
-/** $ 1.234,56 / U$S 1.234,56 */
+/** $ 1.234,56 / U$S 1.234,56 (espacio no separable: el símbolo nunca queda en otro renglón que el monto) */
 export function money(value: number | null | undefined, moneda: Moneda = "ARS") {
   const n = Number(value ?? 0);
   const sign = n < 0 ? "-" : "";
-  return `${sign}${moneda === "USD" ? "U$S" : "$"} ${nf.format(Math.abs(n))}`;
+  return `${sign}${moneda === "USD" ? "U$S" : "$"} ${nf.format(Math.abs(n))}`;
 }
 
 /** +$ 1.234,56 / -$ 1.234,56 */
