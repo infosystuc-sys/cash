@@ -1257,6 +1257,16 @@ function CobroModal({
     if (!vencId && vencs?.[0]) setVencId(String(vencs[0].id));
   }, [vencs, vencId]);
 
+  // Propone la cuenta y el medio previstos en el vencimiento elegido
+  useEffect(() => {
+    if (!venc) return;
+    if (venc.cuenta_prevista_id && cuentas.some((c) => c.id === venc.cuenta_prevista_id)) setCuentaId(String(venc.cuenta_prevista_id));
+    const previsto = (venc.medio_previsto ?? "").toLowerCase();
+    const m = (["transferencia", "efectivo", "deposito", "cheque"] as const).find((x) => previsto.normalize("NFD").replace(/\p{M}/gu, "").startsWith(x));
+    if (m && !(m === "cheque" && modo === "cuenta")) setMedio(m);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venc?.id]);
+
   // Un cheque queda asociado a un único cobro: no se puede repartir entre vencimientos
   useEffect(() => {
     if (modo === "cuenta" && medio === "cheque") setMedio("transferencia");
