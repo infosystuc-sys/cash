@@ -1357,6 +1357,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      cambiar_vencimiento: {
+        Args: { p_fecha: string; p_id: number; p_origen: string }
+        Returns: undefined
+      }
       convertir: {
         Args: {
           p_a: Database["public"]["Enums"]["moneda"]
@@ -1434,8 +1438,10 @@ export type Database = {
           concepto: string
           detalle: string
           fecha: string
+          fecha_real: string
           origen: string
           proyectado: boolean
+          ref_id: number
         }[]
       }
       fn_cashflow_saldo_base: {

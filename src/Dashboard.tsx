@@ -41,7 +41,7 @@ export default function Dashboard() {
   const hasta = RANGOS[periodo].adelante(hoy);
   const en30 = sumarDias(hoy, 30);
 
-  const { data, loading, error } = useData(async () => {
+  const { data, loading, error, reload } = useData(async () => {
     const [cuentas, cheques, cobros, pagos, tc] = await Promise.all([
       supabase.from("v_cuentas_saldo").select("id, nombre, tipo, moneda, saldo, saldo_ars").eq("activa", true).order("id"),
       supabase.from("cheques").select("importe").eq("estado", "en_cartera"),
@@ -71,12 +71,60 @@ export default function Dashboard() {
   const flujo = useData(async () => check(await supabase.rpc("fn_cashflow", { p_desde: desde, p_hasta: hasta, p_periodo: periodo })), [desde, hasta, periodo]);
 
   type FilaFlujo = NonNullable<typeof flujo.data>[number];
-  type Mov = { fecha: string; proyectado: boolean; origen: string; concepto: string; detalle: string | null; ars: number };
+  type Mov = { fecha: string; proyectado: boolean; origen: string; concepto: string; detalle: string | null; ars: number; ref_id: number; fecha_real: string };
+
+  // Saldo real de cada cuenta hoy (USD al TC actual): es el punto de partida de la proyección
+  async function cuentasDisponibles(): Promise<FilaSaldo[]> {
+    const cuentas = check(await supabase.from("v_cuentas_saldo").select("nombre, moneda, saldo, saldo_ars, activa").order("id"));
+    return cuentas
+      .filter((c) => c.activa || (c.saldo_ars ?? 0) !== 0)
+      .map((c) => ({
+        tipo: "Cuenta",
+        nombre: c.nombre ?? "",
+        detalle: c.moneda === "USD" ? `${money(c.saldo, "USD")} × TC ${money(data?.tc ?? 0)}` : "",
+        importe: c.saldo_ars ?? 0,
+      }));
+  }
+
+  const primerProyectado = flujo.data?.find((x) => x.proyectado);
+
+  function verDisponible() {
+    if (!primerProyectado) return;
+    detalle.abrir<FilaSaldo>({
+      titulo: `Disponibilidades al ${fecha(hoy)}`,
+      subtitulo: "Saldo real de cada cuenta (incluye los cobros y pagos ya registrados hoy; USD al TC actual)",
+      cargar: cuentasDisponibles,
+      columnas: colsSaldo,
+      total: money(primerProyectado.saldo_inicial),
+    });
+  }
 
   function verFlujo(f: FilaFlujo, que: "saldo_inicial" | "ingresos" | "egresos" | "neto" | "saldo_final") {
     const nombre = etiquetaPeriodo(periodo, f.periodo_inicio);
-    const rango = `${fecha(f.periodo_inicio)} al ${fecha(f.periodo_fin)}`;
-    const anteriores = (flujo.data ?? []).filter((x) => x.periodo_inicio < f.periodo_inicio);
+    const rango = f.proyectado && f.periodo_inicio < hoy ? `${fecha(hoy)} al ${fecha(f.periodo_fin)}` : `${fecha(f.periodo_inicio)} al ${fecha(f.periodo_fin)}`;
+    // Los pasados encadenan desde el historial; los proyectados, desde las disponibilidades
+    const anteriores = (flujo.data ?? []).filter((x) => x.periodo_inicio < f.periodo_inicio && x.proyectado === f.proyectado);
+
+    if (que === "saldo_inicial" && f.proyectado) {
+      return detalle.abrir<FilaSaldo>({
+        titulo: `Saldo Inicial • ${nombre}`,
+        subtitulo: "Disponibilidades al día + flujo pendiente de los períodos proyectados anteriores",
+        cargar: async () => {
+          const filas = await cuentasDisponibles();
+          if (anteriores.length) {
+            filas.push({
+              tipo: "Flujo",
+              nombre: `Flujo neto pendiente de períodos anteriores (${etiquetaPeriodo(periodo, anteriores[0].periodo_inicio)} a ${etiquetaPeriodo(periodo, anteriores[anteriores.length - 1].periodo_inicio)})`,
+              detalle: `${anteriores.length} período(s)`,
+              importe: anteriores.reduce((s, x) => s + x.neto, 0),
+            });
+          }
+          return filas;
+        },
+        columnas: colsSaldo,
+        total: money(f.saldo_inicial),
+      });
+    }
 
     if (que === "saldo_inicial" || que === "saldo_final") {
       const primero = flujo.data?.[0]?.periodo_inicio ?? f.periodo_inicio;
@@ -118,13 +166,34 @@ export default function Dashboard() {
     const titulos = { ingresos: "Ingresos", egresos: "Egresos", neto: "Flujo Neto" } as const;
     detalle.abrir<Mov>({
       titulo: `${titulos[que]} • ${nombre}`,
-      subtitulo: `Movimientos reales y previstos del ${rango} (USD al TC actual; sin transferencias internas)`,
+      subtitulo: f.proyectado
+        ? `Pendiente de cobro y pago del ${rango}, incluidos los vencidos (los movimientos reales de hoy ya están en las disponibilidades; USD al TC actual)`
+        : `Movimientos reales del ${rango} (USD al TC actual; sin transferencias internas)`,
       cargar: async () => {
         const movs = check(await supabase.rpc("fn_cashflow_detalle", { p_desde: f.periodo_inicio, p_hasta: f.periodo_fin })) as Mov[];
         return movs.filter((m) => (que === "ingresos" ? m.ars > 0 : que === "egresos" ? m.ars < 0 : m.ars !== 0));
       },
+      editarFecha: {
+        columna: "Fecha",
+        puede: (m) => VENCIMIENTO_EDITABLE.has(m.origen),
+        valor: (m) => m.fecha_real,
+        guardar: async (m, nueva) => {
+          check(await supabase.rpc("cambiar_vencimiento", { p_origen: m.origen, p_id: m.ref_id, p_fecha: nueva }));
+          flujo.reload();
+          reload();
+        },
+        ayuda: "Doble click en un cobro/pago previsto o cheque en cartera para cambiar su fecha de vencimiento (Enter guarda, Esc cancela). Si la nueva fecha cae fuera del período, el renglón deja de aparecer acá.",
+      },
       columnas: [
-        { titulo: "Fecha", valor: (m) => fecha(m.fecha) },
+        {
+          titulo: "Fecha",
+          valor: (m) => (
+            <div className="flex flex-col whitespace-nowrap">
+              <span>{fecha(m.fecha)}</span>
+              {m.proyectado && m.fecha_real < m.fecha && <span className="text-[9px] font-bold text-error">vencía {fecha(m.fecha_real)}</span>}
+            </div>
+          ),
+        },
         {
           titulo: "Tipo",
           valor: (m) => (
@@ -137,7 +206,11 @@ export default function Dashboard() {
         { titulo: "Cliente / Proveedor / Cuenta", valor: (m) => m.detalle ?? "—" },
         { titulo: "Importe ARS", valor: (m) => <span className={m.ars < 0 ? "text-error" : "text-on-tertiary-container"}>{signedMoney(m.ars)}</span>, alinear: "right" },
       ],
-      total: que === "ingresos" ? signedMoney(f.ingresos) : que === "egresos" ? money(-f.egresos) : signedMoney(f.neto),
+      // Se calcula desde las filas para que siga cuadrando si se cambia un vencimiento desde el detalle
+      total: (movs) => {
+        const suma = movs.reduce((s, m) => s + m.ars, 0);
+        return que === "egresos" ? money(suma) : signedMoney(suma);
+      },
     });
   }
 
@@ -364,7 +437,7 @@ export default function Dashboard() {
             </div>
 
             <div className="flex items-center justify-between mt-4 text-[10px] text-outline font-medium italic">
-              <span>* Períodos desde hoy proyectados con vencimientos a cobrar, cheques en cartera y cuotas de deuda</span>
+              <span>* Desde hoy: disponibilidades reales + vencimientos pendientes a cobrar, cheques en cartera y cuotas de deuda</span>
               {flujo.data && (
                 <div className="flex items-center gap-2 not-italic">
                   <span className="text-on-surface-variant font-bold uppercase tracking-wider">Máximo Proyectado:</span>
@@ -377,7 +450,9 @@ export default function Dashboard() {
           <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-sm overflow-hidden">
             <div className="p-6 border-b border-outline-variant/10">
               <h3 className="text-sm font-bold text-primary">Detalle de Movimientos por Período</h3>
-              <p className="text-xs text-on-surface-variant">Consolidado en ARS; USD valuado al TC MEP actual</p>
+              <p className="text-xs text-on-surface-variant">
+                Hasta ayer, movimientos reales. Desde hoy, disponibilidades + lo pendiente de cobro y pago. Consolidado en ARS; USD al TC MEP actual.
+              </p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
@@ -395,16 +470,36 @@ export default function Dashboard() {
                 <tbody className="divide-y divide-outline-variant/10 text-xs">
                   {flujo.data?.map((f) => {
                     const neg = f.neto < 0;
+                    const actual = f.proyectado && f.periodo_inicio <= hoy;
                     return (
-                      <tr key={f.periodo_inicio} className={cn("hover:bg-surface-container-low/60 transition-colors", neg && "bg-error-container/5")}>
+                      <React.Fragment key={f.periodo_inicio}>
+                      {f === primerProyectado && (
+                        <tr onClick={verDisponible} title="Ver saldo por cuenta" className="bg-secondary-fixed/30 hover:bg-secondary-fixed/50 cursor-pointer border-y-2 border-secondary/30">
+                          <td className="px-6 py-3">
+                            <div className="flex flex-col">
+                              <span className="font-bold text-sm text-secondary flex items-center gap-1.5">
+                                <Wallet className="w-4 h-4" /> Disponibilidades al {fecha(hoy)}
+                              </span>
+                              <span className="text-[10px] text-on-surface-variant">Saldo real de las cuentas • punto de partida de la proyección</span>
+                            </div>
+                          </td>
+                          <td colSpan={4} />
+                          <td className="px-4 py-3 text-right font-numeric font-bold text-secondary text-sm hover:underline decoration-dotted underline-offset-4">{money(f.saldo_inicial)}</td>
+                          <td className="px-6 py-3 text-center">
+                            <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-secondary text-on-secondary">Hoy</span>
+                          </td>
+                        </tr>
+                      )}
+                      <tr className={cn("hover:bg-surface-container-low/60 transition-colors", neg && "bg-error-container/5")}>
                         <td className="px-6 py-4">
                           <div className="flex flex-col">
                             <span className={cn("font-bold text-sm", neg ? "text-error" : "text-primary")}>{etiquetaPeriodo(periodo, f.periodo_inicio)}</span>
                             {periodo !== "day" && (
                               <span className="text-[10px] text-outline font-numeric">
-                                {fechaCorta(f.periodo_inicio)} al {fechaCorta(f.periodo_fin)}
+                                {actual ? `${fechaCorta(hoy)} (hoy)` : fechaCorta(f.periodo_inicio)} al {fechaCorta(f.periodo_fin)}
                               </span>
                             )}
+                            {periodo === "day" && actual && <span className="text-[10px] text-secondary font-bold">Hoy</span>}
                           </div>
                         </td>
                         <CeldaDetalle className="text-on-surface-variant" onClick={() => verFlujo(f, "saldo_inicial")}>
@@ -433,6 +528,7 @@ export default function Dashboard() {
                           </span>
                         </td>
                       </tr>
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -576,6 +672,9 @@ function Grafico({ filas }: { filas: { periodo_inicio: string; ingresos: number;
     </svg>
   );
 }
+
+/** Orígenes del detalle de cash flow cuyo vencimiento se puede cambiar (ver RPC cambiar_vencimiento). */
+const VENCIMIENTO_EDITABLE = new Set(["cobro_previsto", "pago_previsto", "cheque_cartera"]);
 
 const ORIGEN_FLUJO: Record<string, string> = {
   cobro: "Cobro",

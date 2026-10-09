@@ -13,7 +13,9 @@ import {
   LogOut,
   RefreshCw,
   Truck,
-  ShieldCheck
+  ShieldCheck,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check } from "./lib/supabase";
@@ -37,7 +39,42 @@ const structure = [
   ...(ACCESO_LIBRE ? [] : [{ name: "Usuarios", path: "/usuarios", icon: ShieldCheck }]),
 ];
 
-export function Sidebar() {
+type Item = { name: string; path: string; icon: React.ComponentType<{ className?: string }> };
+
+function NavLinks({ titulo, items, colapsado }: { titulo: string; items: Item[]; colapsado: boolean }) {
+  const location = useLocation();
+  return (
+    <div>
+      {colapsado ? (
+        <div className="mx-3 mb-2 border-t border-outline-variant/30" />
+      ) : (
+        <div className="px-3 mb-2 text-[10px] font-bold text-outline uppercase tracking-widest">{titulo}</div>
+      )}
+      <div className="space-y-1">
+        {items.map((item) => {
+          const isActive = location.pathname === item.path;
+          return (
+            <Link
+              key={item.name}
+              to={item.path}
+              title={colapsado ? item.name : undefined}
+              className={cn(
+                "flex items-center gap-3 py-2 rounded-lg text-sm font-medium transition-colors",
+                colapsado ? "justify-center px-0" : "px-3",
+                isActive ? "bg-primary-container text-on-primary shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface",
+              )}
+            >
+              <item.icon className={cn("w-4 h-4 shrink-0", isActive ? "text-on-primary" : "text-outline")} />
+              {!colapsado && item.name}
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function Sidebar({ colapsado, onToggle }: { colapsado: boolean; onToggle: () => void }) {
   const location = useLocation();
   const { data: cantCuentas } = useData(async () => {
     const { count, error } = await supabase.from("cuentas").select("id", { count: "exact", head: true }).eq("activa", true);
@@ -46,68 +83,48 @@ export function Sidebar() {
   }, [location.pathname]); // se recalcula al cambiar de sección (p.ej. después de crear o eliminar cuentas)
 
   return (
-    <aside className="fixed inset-y-0 left-0 w-64 bg-surface-container-lowest border-r border-outline-variant/30 flex flex-col z-50">
-      <div className="h-16 px-6 flex items-center gap-3">
-        <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-          <TrendingUp className="text-on-primary w-5 h-5" />
-        </div>
-        <div className="flex flex-col">
-          <span className="font-display font-bold text-primary leading-tight">Synapse Tech</span>
-          <span className="text-[10px] font-semibold text-outline uppercase tracking-wider">Finanzas & Cash Flow</span>
-        </div>
+    <aside
+      className={cn(
+        "fixed inset-y-0 left-0 bg-surface-container-lowest border-r border-outline-variant/30 flex flex-col z-50 transition-[width] duration-200",
+        colapsado ? "w-16" : "w-64",
+      )}
+    >
+      <div className={cn("h-16 flex items-center gap-3", colapsado ? "px-2 justify-center" : "px-6")}>
+        {!colapsado && (
+          <>
+            <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center shrink-0">
+              <TrendingUp className="text-on-primary w-5 h-5" />
+            </div>
+            <div className="flex flex-col flex-1 min-w-0">
+              <span className="font-display font-bold text-primary leading-tight truncate">Synapse Tech</span>
+              <span className="text-[10px] font-semibold text-outline uppercase tracking-wider truncate">Finanzas & Cash Flow</span>
+            </div>
+          </>
+        )}
+        <button
+          onClick={onToggle}
+          title={colapsado ? "Expandir menú" : "Retraer menú"}
+          className="p-2 rounded-lg text-outline hover:text-secondary hover:bg-surface-container-low transition-colors shrink-0"
+        >
+          {colapsado ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+        </button>
       </div>
 
-      <nav className="flex-1 px-3 py-4 space-y-6">
-        <div>
-          <div className="px-3 mb-2 text-[10px] font-bold text-outline uppercase tracking-widest">Operaciones</div>
-          <div className="space-y-1">
-            {navigation.map((item) => {
-              const isActive = location.pathname === item.path;
-              return (
-                <Link
-                  key={item.name}
-                  to={item.path}
-                  className={cn(
-                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                    isActive 
-                      ? "bg-primary-container text-on-primary shadow-sm" 
-                      : "text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface"
-                  )}
-                >
-                  <item.icon className={cn("w-4 h-4", isActive ? "text-on-primary" : "text-outline")} />
-                  {item.name}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-
-        <div>
-          <div className="px-3 mb-2 text-[10px] font-bold text-outline uppercase tracking-widest">Estructura</div>
-          <div className="space-y-1">
-            {structure.map((item) => {
-              const isActive = location.pathname === item.path;
-              return (
-                <Link
-                  key={item.name}
-                  to={item.path}
-                  className={cn(
-                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                    isActive 
-                      ? "bg-primary-container text-on-primary shadow-sm" 
-                      : "text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface"
-                  )}
-                >
-                  <item.icon className={cn("w-4 h-4", isActive ? "text-on-primary" : "text-outline")} />
-                  {item.name}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
+      <nav className={cn("flex-1 py-4 space-y-6 overflow-y-auto", colapsado ? "px-2" : "px-3")}>
+        <NavLinks titulo="Operaciones" items={navigation} colapsado={colapsado} />
+        <NavLinks titulo="Estructura" items={structure} colapsado={colapsado} />
       </nav>
 
-      <div className="p-4 mt-auto">
+      <div className={cn("mt-auto", colapsado ? "p-2 flex justify-center" : "p-4")}>
+        {colapsado ? (
+          <Link
+            to="/cuentas"
+            title={`Tesorería AR • ${cantCuentas ?? "–"} cuentas`}
+            className="w-10 h-10 bg-surface-container-low rounded-lg flex items-center justify-center text-secondary border border-outline-variant/30"
+          >
+            <Plus className="w-4 h-4" />
+          </Link>
+        ) : (
         <div className="p-3 bg-surface-container-low rounded-xl border border-outline-variant/20">
           <div className="flex items-center justify-between">
             <div className="flex flex-col">
@@ -119,12 +136,13 @@ export function Sidebar() {
             </Link>
           </div>
         </div>
+        )}
       </div>
     </aside>
   );
 }
 
-export function Header() {
+export function Header({ colapsado }: { colapsado: boolean }) {
   const session = useSession();
   const navigate = useNavigate();
   const { data: tc, reload } = useData(async () => {
@@ -139,7 +157,12 @@ export function Header() {
   }
 
   return (
-    <header className="fixed top-0 left-64 right-0 h-16 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/20 flex items-center justify-between px-8 z-40">
+    <header
+      className={cn(
+        "fixed top-0 right-0 h-16 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/20 flex items-center justify-between px-8 z-40 transition-[left] duration-200",
+        colapsado ? "left-16" : "left-64",
+      )}
+    >
       <div className="flex items-center gap-6">
         <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-container-low rounded-full text-on-surface-variant border border-outline-variant/20">
           <Calendar className="w-3.5 h-3.5 text-outline" />
@@ -184,12 +207,34 @@ export function Header() {
   );
 }
 
+const CLAVE_MENU = "menu-colapsado";
+
 export function Layout({ children }: { children: React.ReactNode }) {
+  // Preferencia por navegador; si el storage no está disponible, arranca expandido
+  const [colapsado, setColapsado] = React.useState(() => {
+    try {
+      return localStorage.getItem(CLAVE_MENU) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  function toggle() {
+    setColapsado((c) => {
+      try {
+        localStorage.setItem(CLAVE_MENU, c ? "0" : "1");
+      } catch {
+        // sin persistencia
+      }
+      return !c;
+    });
+  }
+
   return (
     <div className="min-h-screen bg-surface">
-      <Sidebar />
-      <Header />
-      <main className="pl-64 pt-16">
+      <Sidebar colapsado={colapsado} onToggle={toggle} />
+      <Header colapsado={colapsado} />
+      <main className={cn("pt-16 transition-[padding] duration-200", colapsado ? "pl-16" : "pl-64")}>
         <div className="p-8">
           {children}
         </div>
