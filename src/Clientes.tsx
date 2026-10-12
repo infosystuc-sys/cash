@@ -84,7 +84,7 @@ export default function Clientes() {
 
       <ErrorBanner message={error} />
 
-      <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-sm overflow-hidden">
+      <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-sm overflow-x-auto">
         {loading && !data ? (
           <Loading />
         ) : (

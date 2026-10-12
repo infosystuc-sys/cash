@@ -888,7 +888,7 @@ function TransferenciaModal({
         </>
       }
     >
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
         <FormGroup label="Cuenta Origen *">
           <select className={selectCls} value={origenId} onChange={(e) => setOrigenId(e.target.value)}>
             {cuentas.map(opcion)}
@@ -913,7 +913,7 @@ function TransferenciaModal({
             <MoneyInput value={importeDestino} onChange={setImporteDestino} prefix={destino?.moneda === "USD" ? "U$S" : "$"} />
           </FormGroup>
         )}
-        <FormGroup label="Concepto / Motivo" className="col-span-2">
+        <FormGroup label="Concepto / Motivo" className="sm:col-span-2">
           <input className={inputCls} value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Reserva para pago de sueldos" />
         </FormGroup>
       </div>

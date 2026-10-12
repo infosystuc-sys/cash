@@ -261,13 +261,14 @@ export function ReporteVentas({ tc }: { tc: number }) {
               {conFacturas.length === 0 ? (
                 <p className="text-xs text-outline py-4">Todavía no hay facturas cargadas en Ingresos.</p>
               ) : (
+                <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="text-[10px] font-bold text-outline uppercase tracking-widest border-b border-outline-variant/10">
                       <th className="py-2">Mes</th>
                       <th className="py-2 text-right">Facturado</th>
                       <th className="py-2 text-right">Cobrado</th>
-                      <th className="py-2 pl-4 w-32">% cobrado</th>
+                      <th className="py-2 pl-4 sm:w-32 text-right sm:text-left">% cobrado</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-outline-variant/10">
@@ -280,10 +281,10 @@ export function ReporteVentas({ tc }: { tc: number }) {
                           <td className="py-2 text-right font-numeric">{money(m.cobrado)}</td>
                           <td className="py-2 pl-4">
                             <div className="flex items-center gap-2">
-                              <div className="flex-1 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
+                              <div className="hidden sm:block flex-1 h-1.5 bg-surface-container-high rounded-full overflow-hidden">
                                 <div className="h-full bg-on-tertiary-container rounded-full" style={{ width: `${Math.min(pct, 100)}%` }} />
                               </div>
-                              <span className="text-[10px] font-bold font-numeric text-on-surface-variant w-10 text-right">{pct}%</span>
+                              <span className="text-[10px] font-bold font-numeric text-on-surface-variant w-10 text-right ml-auto">{pct}%</span>
                             </div>
                           </td>
                         </tr>
@@ -291,6 +292,7 @@ export function ReporteVentas({ tc }: { tc: number }) {
                     })}
                   </tbody>
                 </table>
+                </div>
               )}
             </div>
           </div>

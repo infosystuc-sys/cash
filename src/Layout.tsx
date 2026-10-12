@@ -17,6 +17,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  Menu,
+  X,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check } from "./lib/supabase";
@@ -77,7 +79,31 @@ function NavLinks({ titulo, items, colapsado }: { titulo: string; items: Item[];
   );
 }
 
-export function Sidebar({ colapsado, onToggle }: { colapsado: boolean; onToggle: () => void }) {
+/** true cuando la pantalla es de escritorio (lg, 1024px o más): ahí el menú es fijo y se puede retraer. */
+function useEscritorio() {
+  const consulta = "(min-width: 1024px)";
+  const [esc, setEsc] = React.useState(() => typeof window !== "undefined" && window.matchMedia(consulta).matches);
+  React.useEffect(() => {
+    const m = window.matchMedia(consulta);
+    const f = () => setEsc(m.matches);
+    m.addEventListener("change", f);
+    return () => m.removeEventListener("change", f);
+  }, []);
+  return esc;
+}
+
+export function Sidebar({
+  colapsado,
+  onToggle,
+  abierto,
+  onCerrar,
+}: {
+  colapsado: boolean;
+  onToggle: () => void;
+  /** Solo celular: si el panel está desplegado */
+  abierto: boolean;
+  onCerrar: () => void;
+}) {
   const location = useLocation();
   const { data: cantCuentas } = useData(async () => {
     const { count, error } = await supabase.from("cuentas").select("id", { count: "exact", head: true }).eq("activa", true);
@@ -88,8 +114,10 @@ export function Sidebar({ colapsado, onToggle }: { colapsado: boolean; onToggle:
   return (
     <aside
       className={cn(
-        "fixed inset-y-0 left-0 bg-surface-container-lowest border-r border-outline-variant/30 flex flex-col z-50 transition-[width] duration-200",
-        colapsado ? "w-16" : "w-64",
+        "fixed inset-y-0 left-0 bg-surface-container-lowest border-r border-outline-variant/30 flex flex-col z-50 w-64 max-w-[85vw]",
+        "transition-[transform,width] duration-200 lg:translate-x-0 lg:max-w-none",
+        abierto ? "translate-x-0 shadow-2xl" : "-translate-x-full",
+        colapsado ? "lg:w-16" : "lg:w-64",
       )}
     >
       <div className={cn("h-16 flex items-center gap-3", colapsado ? "px-2 justify-center" : "px-6")}>
@@ -105,9 +133,16 @@ export function Sidebar({ colapsado, onToggle }: { colapsado: boolean; onToggle:
           </>
         )}
         <button
+          onClick={onCerrar}
+          title="Cerrar menú"
+          className="lg:hidden p-2 rounded-lg text-outline hover:text-secondary hover:bg-surface-container-low transition-colors shrink-0"
+        >
+          <X className="w-5 h-5" />
+        </button>
+        <button
           onClick={onToggle}
           title={colapsado ? "Expandir menú" : "Retraer menú"}
-          className="p-2 rounded-lg text-outline hover:text-secondary hover:bg-surface-container-low transition-colors shrink-0"
+          className="hidden lg:block p-2 rounded-lg text-outline hover:text-secondary hover:bg-surface-container-low transition-colors shrink-0"
         >
           {colapsado ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
         </button>
@@ -146,7 +181,7 @@ export function Sidebar({ colapsado, onToggle }: { colapsado: boolean; onToggle:
   );
 }
 
-export function Header({ colapsado }: { colapsado: boolean }) {
+export function Header({ colapsado, onMenu }: { colapsado: boolean; onMenu: () => void }) {
   const session = useSession();
   const navigate = useNavigate();
   const { data: tc, reload } = useData(async () => {
@@ -163,17 +198,20 @@ export function Header({ colapsado }: { colapsado: boolean }) {
   return (
     <header
       className={cn(
-        "fixed top-0 right-0 h-16 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/20 flex items-center justify-between px-8 z-40 transition-[left] duration-200",
-        colapsado ? "left-16" : "left-64",
+        "fixed top-0 right-0 left-0 h-16 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/20 flex items-center justify-between gap-2 px-3 sm:px-4 lg:px-8 z-40 transition-[left] duration-200",
+        colapsado ? "lg:left-16" : "lg:left-64",
       )}
     >
-      <div className="flex items-center gap-6">
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-container-low rounded-full text-on-surface-variant border border-outline-variant/20">
+      <div className="flex items-center gap-2 sm:gap-4 lg:gap-6 min-w-0">
+        <button onClick={onMenu} title="Abrir menú" className="lg:hidden p-2 -ml-1 rounded-lg text-primary hover:bg-surface-container-low transition-colors shrink-0">
+          <Menu className="w-5 h-5" />
+        </button>
+        <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-surface-container-low rounded-full text-on-surface-variant border border-outline-variant/20 whitespace-nowrap">
           <Calendar className="w-3.5 h-3.5 text-outline" />
           <span className="text-xs font-medium">Buenos Aires, {fecha(hoyISO())}</span>
         </div>
-        <div className="flex items-center gap-3 px-4 py-1.5 bg-surface-container-lowest rounded-lg shadow-sm border border-outline-variant/20">
-          <span className="text-[10px] font-bold text-outline uppercase tracking-wider">TC Ref USD</span>
+        <div className="flex items-center gap-2 lg:gap-3 px-2.5 lg:px-4 py-1.5 bg-surface-container-lowest rounded-lg shadow-sm border border-outline-variant/20 whitespace-nowrap">
+          <span className="hidden sm:inline text-[10px] font-bold text-outline uppercase tracking-wider">TC Ref USD</span>
           <span className="font-numeric text-xs font-bold text-on-surface" title={tc ? `Cotización del ${fecha(tc.fecha)}` : "Sin cotización"}>
             {tc?.venta ? money(tc.venta) : "—"}
           </span>
@@ -184,14 +222,18 @@ export function Header({ colapsado }: { colapsado: boolean }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-4">
-        <button onClick={() => navigate("/ingresos?nuevo=1")} className="flex items-center gap-2 bg-secondary text-on-secondary px-4 py-2 rounded-lg text-xs font-bold hover:bg-secondary-container transition-all shadow-sm">
+      <div className="flex items-center gap-2 lg:gap-4 shrink-0">
+        <button
+          onClick={() => navigate("/ingresos?nuevo=1")}
+          title="Nueva Operación"
+          className="flex items-center gap-2 bg-secondary text-on-secondary p-2.5 sm:px-4 sm:py-2 rounded-lg text-xs font-bold hover:bg-secondary-container transition-all shadow-sm"
+        >
           <Plus className="w-4 h-4" />
-          Nueva Operación
+          <span className="hidden sm:inline">Nueva Operación</span>
         </button>
-        <div className="h-8 w-px bg-outline-variant/30 mx-2" />
+        <div className="hidden lg:block h-8 w-px bg-outline-variant/30 mx-2" />
         <div className="flex items-center gap-3 text-right">
-          <div className="flex flex-col">
+          <div className="hidden lg:flex flex-col">
             <span className="text-xs font-bold text-on-surface">{ACCESO_LIBRE ? "Acceso libre" : session?.user.email}</span>
             <span className="text-[10px] font-medium text-outline uppercase">Tesorería</span>
           </div>
@@ -234,12 +276,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
     });
   }
 
+  // Celular: el menú es un panel que se abre con el botón ☰ y se cierra al navegar o tocar afuera
+  const [abierto, setAbierto] = React.useState(false);
+  const location = useLocation();
+  const escritorio = useEscritorio();
+  React.useEffect(() => setAbierto(false), [location.pathname]);
+  React.useEffect(() => {
+    if (escritorio) setAbierto(false);
+  }, [escritorio]);
+
   return (
-    <div className="min-h-screen bg-surface">
-      <Sidebar colapsado={colapsado} onToggle={toggle} />
-      <Header colapsado={colapsado} />
-      <main className={cn("pt-16 transition-[padding] duration-200", colapsado ? "pl-16" : "pl-64")}>
-        <div className="p-8">
+    <div className="min-h-screen bg-surface overflow-x-hidden">
+      <Sidebar colapsado={colapsado && escritorio} onToggle={toggle} abierto={abierto} onCerrar={() => setAbierto(false)} />
+      {abierto && <div onClick={() => setAbierto(false)} className="fixed inset-0 z-[45] bg-primary/40 backdrop-blur-sm lg:hidden" />}
+      <Header colapsado={colapsado} onMenu={() => setAbierto(true)} />
+      <main className={cn("pt-16 transition-[padding] duration-200", colapsado ? "lg:pl-16" : "lg:pl-64")}>
+        <div className="p-4 sm:p-6 lg:p-8">
           {children}
         </div>
       </main>

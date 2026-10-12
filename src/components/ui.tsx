@@ -117,25 +117,25 @@ export function Modal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 bg-primary/40 backdrop-blur-sm">
-      <div className={cn("relative w-full bg-surface-container-lowest rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]", size)}>
-        <div className="px-8 py-6 border-b border-outline-variant/10 flex items-center justify-between bg-surface-container-low/30">
-          <div className="flex items-center gap-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-2 sm:p-6 bg-primary/40 backdrop-blur-sm">
+      <div className={cn("relative w-full bg-surface-container-lowest rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[90vh]", size)}>
+        <div className="px-4 sm:px-8 py-4 sm:py-6 border-b border-outline-variant/10 flex items-center justify-between gap-2 bg-surface-container-low/30">
+          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             {icon && (
-              <div className="w-12 h-12 rounded-xl bg-secondary-fixed text-secondary flex items-center justify-center shadow-sm">{icon}</div>
+              <div className="hidden sm:flex w-12 h-12 rounded-xl bg-secondary-fixed text-secondary items-center justify-center shadow-sm shrink-0">{icon}</div>
             )}
-            <div>
-              <h2 className="text-xl font-bold text-primary tracking-tight font-display">{title}</h2>
+            <div className="min-w-0">
+              <h2 className="text-lg sm:text-xl font-bold text-primary tracking-tight font-display">{title}</h2>
               {subtitle && <p className="text-xs text-on-surface-variant">{subtitle}</p>}
             </div>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-surface-container-high transition-colors text-outline">
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-surface-container-high transition-colors text-outline shrink-0">
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-8 overflow-y-auto space-y-6">{children}</div>
+        <div className="p-4 sm:p-8 overflow-y-auto space-y-6">{children}</div>
         {footer && (
-          <div className="px-8 py-4 border-t border-outline-variant/10 flex items-center justify-end gap-3 bg-surface-container-low/30">
+          <div className="px-4 sm:px-8 py-3 sm:py-4 border-t border-outline-variant/10 flex flex-wrap items-center justify-end gap-x-3 gap-y-2 bg-surface-container-low/30">
             {footer}
           </div>
         )}
@@ -219,7 +219,7 @@ export function Segmented<T extends string>({
   options: { value: T; label: string; danger?: boolean }[];
 }) {
   return (
-    <div className="flex items-center gap-1 bg-surface-container-low p-1 rounded-lg border border-outline-variant/10">
+    <div className="flex flex-wrap items-center gap-1 max-w-full bg-surface-container-low p-1 rounded-lg border border-outline-variant/10">
       {options.map((o) => (
         <button
           key={o.value}
