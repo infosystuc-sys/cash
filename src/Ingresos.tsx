@@ -23,7 +23,7 @@ import { useData } from "./lib/useData";
 import { exportCsv } from "./lib/csv";
 import { ClienteModal } from "./Clientes";
 import { useDetalle, tarjetaClickeable, type ColumnaDetalle } from "./components/Detalle";
-import { fecha, hoyISO, iniciales, money, porcentaje, sumarDias, sumarMeses, textoVencimiento, type Moneda } from "./lib/format";
+import { fecha, hoyISO, iniciales, money, number, porcentaje, sumarDias, sumarMeses, textoVencimiento, type Moneda } from "./lib/format";
 import {
   CancelButton,
   EmptyRow,
@@ -45,7 +45,8 @@ import {
   type ModoImputacion,
 } from "./components/ui";
 
-type Ingreso = Row<"v_ingresos">;
+/** proximo_importe: importe original de la próxima cuota con saldo (se completa al cargar el listado). */
+type Ingreso = Row<"v_ingresos"> & { proximo_importe?: number | null };
 type Vencimiento = Row<"v_ingreso_vencimientos">;
 type Cuenta = { id: number; nombre: string; moneda: Moneda };
 
@@ -104,7 +105,10 @@ export default function Ingresos() {
     let q = supabase.from("v_ingresos").select("*").order("fecha_factura", { ascending: false }).order("id", { ascending: false });
     if (desde) q = q.gte("fecha_factura", desde);
     if (hasta) q = q.lte("fecha_factura", hasta);
-    return check(await q);
+    // Importe de cada vencimiento con saldo, para mostrar el importe de la próxima cuota junto a su saldo
+    const [ingresos, pendientes] = await Promise.all([q, supabase.from("v_ingreso_vencimientos").select("ingreso_id, numero, importe").gt("saldo", 0)]);
+    const importes = new Map(check(pendientes).map((v) => [`${v.ingreso_id}-${v.numero}`, v.importe]));
+    return check(ingresos).map((i) => ({ ...i, proximo_importe: importes.get(`${i.id}-${i.proxima_cuota}`) ?? null }));
   }, [desde, hasta]);
 
   const tc = catalogos.data?.tc ?? 0;
@@ -184,6 +188,7 @@ export default function Ingresos() {
     moneda: (i) => i.moneda,
     importe: (i) => ars(i, i.importe_total),
     vencimiento: (i) => i.proximo_vencimiento,
+    saldoVto: (i) => ars(i, i.proximo_saldo),
     estado: (i) => ESTADO_LABEL[i.estado ?? ""],
   });
 
@@ -245,6 +250,8 @@ export default function Ingresos() {
                   Cobrado: i.cobrado,
                   Saldo: i.saldo,
                   "Prox. Vencimiento": fecha(i.proximo_vencimiento),
+                  "Importe Vto.": i.proximo_importe,
+                  "Saldo Vto.": i.proximo_saldo,
                   Estado: ESTADO_LABEL[i.estado ?? ""],
                 })),
               )
@@ -466,12 +473,13 @@ export default function Ingresos() {
                   <ThOrden columna="moneda" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-center">Moneda</ThOrden>
                   <ThOrden columna="importe" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-right">Importe Total</ThOrden>
                   <ThOrden columna="vencimiento" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-center">Próx. Vencimiento</ThOrden>
+                  <ThOrden columna="saldoVto" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-right">Importe / Saldo Vto.</ThOrden>
                   <ThOrden columna="estado" orden={orden} onOrdenar={ordenarPor} className="px-4 py-4 text-center">Estado</ThOrden>
                   <th className="px-6 py-4 text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-outline-variant/10 text-xs">
-                {filas.length === 0 && <EmptyRow colSpan={9} label="No hay ingresos para los filtros elegidos" />}
+                {filas.length === 0 && <EmptyRow colSpan={10} label="No hay ingresos para los filtros elegidos" />}
                 {ordenadas.map((i) => (
                   <React.Fragment key={i.id}>
                     <InvoiceRow
@@ -675,6 +683,20 @@ function InvoiceRow({
           <span className="text-outline">—</span>
         )}
       </td>
+      <td className="px-4 py-4 text-right">
+        {i.proximo_vencimiento ? (
+          <div className="flex flex-col items-end">
+            <span className="font-numeric font-medium text-on-surface-variant whitespace-nowrap" title="Importe del vencimiento">
+              {money(i.proximo_importe ?? i.proximo_saldo, moneda)}
+            </span>
+            <span className={cn("font-numeric font-bold whitespace-nowrap", isError ? "text-error" : "text-primary")} title="Saldo del vencimiento">
+              Saldo {money(i.proximo_saldo, moneda)}
+            </span>
+          </div>
+        ) : (
+          <span className="text-outline">—</span>
+        )}
+      </td>
       <td className="px-4 py-4 text-center">
         <div className="inline-flex flex-col items-center gap-1.5">
           <span
@@ -739,7 +761,7 @@ function VencimientosDetalle({ ingreso, onCobrar }: { ingreso: Ingreso; onCobrar
 
   return (
     <tr className="bg-surface-container-low/40">
-      <td colSpan={9} className="px-6 py-4">
+      <td colSpan={10} className="px-6 py-4">
         {loading && !data ? (
           <Loading />
         ) : (
@@ -1272,21 +1294,44 @@ function CobroModal({
     if (modo === "cuenta" && medio === "cheque") setMedio("transferencia");
   }, [modo, medio]);
 
+  // Deuda en USD cobrada en pesos: se ingresan los pesos recibidos y se imputa su equivalente en USD
+  const [monedaCobro, setMonedaCobro] = useState<Moneda>(moneda);
+  const enPesos = moneda === "USD" && monedaCobro === "ARS";
+  const [pesos, setPesos] = useState(NaN);
+  const cuentasCobro = enPesos ? cuentas.filter((c) => c.moneda === "ARS") : cuentas;
+
+  // En pesos se acredita en una cuenta en pesos; al cancelar el total se proponen los pesos al TC de referencia
+  useEffect(() => {
+    if (!enPesos) return;
+    if (!cuentasCobro.some((c) => String(c.id) === cuentaId)) setCuentaId(String(cuentasCobro[0]?.id ?? ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enPesos]);
+  useEffect(() => {
+    if (enPesos && modo === "total" && venc && tc) setPesos(Math.round((venc.saldo ?? 0) * tc * 100) / 100);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enPesos, modo, venc?.id]);
+
   const saldoIngreso = (vencs ?? []).reduce((s, v) => s + (v.saldo ?? 0), 0);
-  const monto = modo === "total" ? venc?.saldo ?? 0 : importe;
+  // Total en pesos: el TC sale de los pesos recibidos sobre el saldo en USD del vencimiento
+  const tcImplicito = enPesos && modo === "total" && venc?.saldo && pesos > 0 ? Math.round((pesos / venc.saldo) * 10000) / 10000 : NaN;
+  const tcFinal = enPesos && modo === "total" ? tcImplicito : tcCobro;
+  const monto = modo === "total" ? venc?.saldo ?? 0 : enPesos ? (pesos > 0 && tcCobro > 0 ? Math.round((pesos / tcCobro) * 100) / 100 : NaN) : importe;
   const reparto = modo === "cuenta" ? repartir(monto, vencs ?? []) : [];
 
   const cuenta = cuentas.find((c) => String(c.id) === cuentaId);
-  const necesitaTc = medio === "cheque" ? moneda === "USD" : cuenta && cuenta.moneda !== moneda;
+  const necesitaTc = enPesos || (medio === "cheque" ? moneda === "USD" : cuenta && cuenta.moneda !== moneda);
 
   const guardar = () =>
     run(async () => {
       if (!venc) return setError("No hay vencimientos pendientes");
+      if (enPesos && !(pesos > 0)) return setError("Ingresá los pesos cobrados");
+      if (enPesos && modo !== "total" && !(tcCobro > 0)) return setError("Ingresá el tipo de cambio");
       if (!(monto > 0)) return setError("Ingresá el importe cobrado");
       if (modo === "parcial" && monto >= (venc.saldo ?? 0))
         return setError(`Un cobro parcial debe ser menor al saldo del vencimiento (${money(venc.saldo, moneda)}). Para cancelarlo elegí "Total".`);
       if (modo === "cuenta" && monto > saldoIngreso) return setError(`Supera el saldo pendiente del ingreso (${money(saldoIngreso, moneda)})`);
-      if (necesitaTc && !(tcCobro > 0)) return setError("Ingresá el tipo de cambio");
+      if (necesitaTc && !(tcFinal > 0)) return setError("Ingresá el tipo de cambio");
+      if (enPesos && cuenta?.moneda !== "ARS" && medio !== "cheque") return setError("Un cobro en pesos se acredita en una cuenta en pesos");
       if (medio === "cheque" && (!ch.banco_emisor.trim() || !ch.numero.trim() || !ch.fecha_pago)) return setError("Completá banco, número y fecha de pago del cheque");
       if (medio !== "cheque" && !cuenta) return setError("Elegí la cuenta destino");
       if (modo === "cuenta") {
@@ -1297,7 +1342,7 @@ function CobroModal({
             p_importe: monto,
             p_medio: medio,
             p_cuenta_id: cuenta!.id,
-            p_tc: necesitaTc || moneda === "USD" ? tcCobro : undefined,
+            p_tc: necesitaTc || moneda === "USD" ? tcFinal : undefined,
           }),
         );
         return onSaved();
@@ -1309,7 +1354,7 @@ function CobroModal({
           p_importe: monto,
           p_medio: medio,
           p_cuenta_id: medio === "cheque" ? undefined : cuenta!.id,
-          p_tc: necesitaTc || moneda === "USD" ? tcCobro : undefined,
+          p_tc: necesitaTc || moneda === "USD" ? tcFinal : undefined,
           p_cheque: medio === "cheque" ? ch : undefined,
         }),
       );
@@ -1349,6 +1394,33 @@ function CobroModal({
         <FormGroup label="Fecha de cobro *">
           <input type="date" className={inputCls} value={fechaC} onChange={(e) => setFechaC(e.target.value)} />
         </FormGroup>
+        {moneda === "USD" && (
+          <FormGroup label="Moneda en que cobrás" className="sm:col-span-2">
+            <Segmented
+              value={monedaCobro}
+              onChange={setMonedaCobro}
+              options={[
+                { value: "USD", label: "Dólares (USD)" },
+                { value: "ARS", label: "Pesos (ARS) al tipo de cambio" },
+              ]}
+            />
+          </FormGroup>
+        )}
+        {enPesos ? (
+          <FormGroup label="Pesos cobrados * (ARS)">
+            <MoneyInput value={pesos} onChange={setPesos} />
+            {Number.isFinite(monto) && monto > 0 && (
+              <span className="text-[10px] font-bold text-secondary">
+                Cancela {money(monto, moneda)} de la deuda
+                {modo === "total" && tcImplicito > 0 && ` • TC ${number(tcImplicito)}`}
+              </span>
+            )}
+            {modo === "parcial" && venc && monto > 0 && monto < (venc.saldo ?? 0) && (
+              <span className="text-[10px] font-bold text-secondary">Queda saldo en el vencimiento: {money((venc.saldo ?? 0) - monto, moneda)}</span>
+            )}
+            {modo === "cuenta" && <span className="text-[10px] text-on-surface-variant">Máximo {money(saldoIngreso, moneda)}</span>}
+          </FormGroup>
+        ) : (
         <FormGroup label={`Importe cobrado * (${moneda})`}>
           {modo === "total" ? (
             <div className="h-10 px-3 rounded-lg bg-surface-container-low flex items-center justify-end text-xs font-bold font-numeric text-primary">
@@ -1362,6 +1434,7 @@ function CobroModal({
           )}
           {modo === "cuenta" && <span className="text-[10px] text-on-surface-variant">Máximo {money(saldoIngreso, moneda)}</span>}
         </FormGroup>
+        )}
         <FormGroup label="Medio de cobro *">
           <select className={selectCls} value={medio} onChange={(e) => setMedio(e.target.value as typeof medio)}>
             <option value="transferencia">Transferencia</option>
@@ -1375,7 +1448,7 @@ function CobroModal({
         {medio !== "cheque" && (
           <FormGroup label="Cuenta destino *">
             <select className={selectCls} value={cuentaId} onChange={(e) => setCuentaId(e.target.value)}>
-              {cuentas.map((c) => (
+              {cuentasCobro.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.nombre} ({c.moneda})
                 </option>
@@ -1383,7 +1456,7 @@ function CobroModal({
             </select>
           </FormGroup>
         )}
-        {(necesitaTc || moneda === "USD") && (
+        {(necesitaTc || moneda === "USD") && !(enPesos && modo === "total") && (
           <FormGroup label="Tipo de cambio (ARS por USD) *">
             <MoneyInput value={tcCobro} onChange={setTcCobro} />
           </FormGroup>
@@ -1414,9 +1487,9 @@ function CobroModal({
           <FormGroup label="CUIT librador">
             <input className={inputCls} value={ch.librador_cuit} onChange={(e) => setCh({ ...ch, librador_cuit: e.target.value })} />
           </FormGroup>
-          {moneda === "USD" && Number.isFinite(monto) && tcCobro > 0 && (
+          {moneda === "USD" && Number.isFinite(monto) && tcFinal > 0 && (
             <p className="sm:col-span-2 text-[11px] text-on-surface-variant">
-              Importe del cheque: <strong className="font-numeric">{money(monto * tcCobro)}</strong>
+              Importe del cheque: <strong className="font-numeric">{money(monto * tcFinal)}</strong>
             </p>
           )}
         </div>
