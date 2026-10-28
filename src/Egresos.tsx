@@ -443,7 +443,8 @@ function EgresoModal({ egreso, onClose, onSaved }: { egreso?: Egreso; onClose: (
 
   useEffect(() => {
     if (cat?.tc && !Number.isFinite(tc)) setTc(cat.tc);
-    if (cat && !cuentaId) setCuentaId(String(cat.cuentas[0]?.id ?? ""));
+    // Cuenta propuesta: Galicia (no Galicia Tom); si no existe, la primera
+    if (cat && !cuentaId) setCuentaId(String((cat.cuentas.find((c) => c.nombre?.trim().toLowerCase() === "galicia") ?? cat.cuentas[0])?.id ?? ""));
   }, [cat, tc, cuentaId]);
 
   const cuenta = cat?.cuentas.find((c) => String(c.id) === cuentaId);
