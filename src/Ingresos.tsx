@@ -80,7 +80,7 @@ export default function Ingresos() {
   const [busqueda, setBusqueda] = useState("");
   const [clienteId, setClienteId] = useState("");
   const [tipoId, setTipoId] = useState("");
-  const [periodo, setPeriodo] = useState<Periodo>("90");
+  const [periodo, setPeriodo] = useState<Periodo>("mes");
   const [estado, setEstado] = useState<Estado>("todos");
 
   useEffect(() => {
@@ -101,15 +101,22 @@ export default function Ingresos() {
   });
 
   const [desde, hasta] = rangoPeriodo(periodo);
-  const { data, loading, error, reload } = useData(async () => {
+  const { data: cargado, loading, error, reload } = useData(async () => {
     let q = supabase.from("v_ingresos").select("*").order("fecha_factura", { ascending: false }).order("id", { ascending: false });
     if (desde) q = q.gte("fecha_factura", desde);
     if (hasta) q = q.lte("fecha_factura", hasta);
-    // Importe de cada vencimiento con saldo, para mostrar el importe de la próxima cuota junto a su saldo
-    const [ingresos, pendientes] = await Promise.all([q, supabase.from("v_ingreso_vencimientos").select("ingreso_id, numero, importe").gt("saldo", 0)]);
+    const [ingresos, vencidas, pendientes] = await Promise.all([
+      q,
+      // Vencido impago: todo lo atrasado, sin importar el mes de la factura
+      supabase.from("v_ingresos").select("*").eq("estado", "vencido").order("fecha_factura", { ascending: false }).order("id", { ascending: false }),
+      // Importe de cada vencimiento con saldo, para mostrar el importe de la próxima cuota junto a su saldo
+      supabase.from("v_ingreso_vencimientos").select("ingreso_id, numero, importe").gt("saldo", 0),
+    ]);
     const importes = new Map(check(pendientes).map((v) => [`${v.ingreso_id}-${v.numero}`, v.importe]));
-    return check(ingresos).map((i) => ({ ...i, proximo_importe: importes.get(`${i.id}-${i.proxima_cuota}`) ?? null }));
+    const conImporte = (l: Row<"v_ingresos">[]) => l.map((i) => ({ ...i, proximo_importe: importes.get(`${i.id}-${i.proxima_cuota}`) ?? null }));
+    return { ingresos: conImporte(check(ingresos)), vencidas: conImporte(check(vencidas)) };
   }, [desde, hasta]);
+  const data = cargado?.ingresos;
 
   const tc = catalogos.data?.tc ?? 0;
   const ars = (i: { moneda: string | null }, v: number | null) => (i.moneda === "USD" ? (v ?? 0) * tc : v ?? 0);
@@ -160,24 +167,28 @@ export default function Ingresos() {
     { titulo: "Saldo ARS", valor: (v) => money(ars(v, v.saldo)), alinear: "right" },
   ];
 
-  const base = useMemo(
-    () =>
-      (data ?? []).filter((i) => {
-        const q = busqueda.toLowerCase().trim();
-        if (q && !`${i.cliente} ${i.descripcion} ${i.comprobante ?? ""}`.toLowerCase().includes(q)) return false;
-        if (clienteId && String(i.cliente_id) !== clienteId) return false;
-        if (tipoId && String(i.tipo_ingreso_id) !== tipoId) return false;
-        return true;
-      }),
-    [data, busqueda, clienteId, tipoId],
-  );
+  const filtrar = (lista: Ingreso[]) =>
+    lista.filter((i) => {
+      const q = busqueda.toLowerCase().trim();
+      if (q && !`${i.cliente} ${i.descripcion} ${i.comprobante ?? ""}`.toLowerCase().includes(q)) return false;
+      if (clienteId && String(i.cliente_id) !== clienteId) return false;
+      if (tipoId && String(i.tipo_ingreso_id) !== tipoId) return false;
+      return true;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const base = useMemo(() => filtrar(data ?? []), [data, busqueda, clienteId, tipoId]);
+  // Vencidas de cualquier mes (no dependen del filtro de período)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const vencidas = useMemo(() => filtrar(cargado?.vencidas ?? []), [cargado, busqueda, clienteId, tipoId]);
 
-  const filas = base.filter((i) => {
-    if (estado === "pendientes") return i.estado === "pendiente" || i.estado === "cobrado_parcial";
-    if (estado === "cobrados") return i.estado === "cobrado";
-    if (estado === "vencidos") return i.estado === "vencido";
-    return true;
-  });
+  const filas =
+    estado === "vencidos"
+      ? vencidas
+      : base.filter((i) => {
+          if (estado === "pendientes") return i.estado === "pendiente" || i.estado === "cobrado_parcial";
+          if (estado === "cobrados") return i.estado === "cobrado";
+          return true;
+        });
 
   // Orden por columna (click en el encabezado). Importes comparados en ARS.
   const { ordenadas, orden, ordenarPor } = useOrden(filas, {
@@ -195,8 +206,7 @@ export default function Ingresos() {
   const kpi = useMemo(() => {
     const total = base.reduce((s, i) => s + ars(i, i.importe_total), 0);
     const cobrado = base.reduce((s, i) => s + ars(i, i.cobrado), 0);
-    const vencidos = base.filter((i) => i.estado === "vencido");
-    const vencido = vencidos.reduce((s, i) => s + ars(i, i.saldo), 0);
+    const vencido = vencidas.reduce((s, i) => s + ars(i, i.saldo), 0);
     const enTermino = base.filter((i) => i.estado === "pendiente" || i.estado === "cobrado_parcial");
     return {
       total,
@@ -204,10 +214,10 @@ export default function Ingresos() {
       vencido,
       enTermino: enTermino.reduce((s, i) => s + ars(i, i.saldo), 0),
       cantEnTermino: enTermino.length,
-      cantVencidos: vencidos.length,
+      cantVencidos: vencidas.length,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, tc]);
+  }, [base, vencidas, tc]);
 
   async function eliminar(i: Ingreso) {
     if ((i.cobrado ?? 0) > 0) return alert("No se puede eliminar un ingreso con cobros registrados.");
@@ -285,7 +295,7 @@ export default function Ingresos() {
           value={money(kpi.total)}
           icon={<Receipt />}
           tag={`${base.length} comprobantes`}
-          subtitle="en el período"
+          subtitle={desde && hasta ? `del ${fecha(desde).slice(0, 5)} al ${fecha(hasta).slice(0, 5)}` : "todo el historial"}
           onClick={() =>
             detalle.abrir({
               titulo: "Total Facturado del Período",
@@ -392,12 +402,12 @@ export default function Ingresos() {
           color="text-error"
           tag={`${kpi.cantVencidos} facturas vencidas`}
           tagColor="bg-error-container/10 text-error"
-          subtitle="requiere reclamo"
+          subtitle="de cualquier mes"
           onClick={() =>
             detalle.abrir({
               titulo: "Vencido Impago",
-              subtitulo: "Facturas con al menos un vencimiento atrasado sin cobrar",
-              filas: base.filter((i) => i.estado === "vencido"),
+              subtitulo: "Facturas de cualquier mes con al menos un vencimiento atrasado sin cobrar",
+              filas: vencidas,
               columnas: colsIngreso("Saldo", (i) => i.saldo),
               total: money(kpi.vencido),
             })
@@ -502,7 +512,8 @@ export default function Ingresos() {
         <div className="p-4 bg-surface-container-low/30 flex items-center justify-between border-t border-outline-variant/10">
           <span className="text-[10px] text-on-surface-variant font-medium">
             Mostrando <span className="font-bold text-on-surface">{filas.length}</span> de{" "}
-            <span className="font-bold text-on-surface">{data?.length ?? 0} facturas</span> del período
+            <span className="font-bold text-on-surface">{estado === "vencidos" ? `${cargado?.vencidas.length ?? 0} facturas vencidas` : `${data?.length ?? 0} facturas`}</span>
+            {estado === "vencidos" ? " de cualquier mes" : " del período"}
           </span>
         </div>
       </div>
