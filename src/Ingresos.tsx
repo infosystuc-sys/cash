@@ -16,6 +16,8 @@ import {
   Pencil,
   CalendarClock,
   CalendarRange,
+  Banknote,
+  X,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
@@ -75,6 +77,7 @@ export default function Ingresos() {
   const [editando, setEditando] = useState<Ingreso | null>(null);
   const detalle = useDetalle();
   const [cobrar, setCobrar] = useState<{ ingreso: Ingreso; vencimiento?: Vencimiento } | null>(null);
+  const [cobranzaCheques, setCobranzaCheques] = useState(false);
   const [expandido, setExpandido] = useState<number | null>(null);
 
   const [busqueda, setBusqueda] = useState("");
@@ -282,6 +285,13 @@ export default function Ingresos() {
           >
             <FileText className="w-4 h-4 text-outline" />
             Listado PDF
+          </button>
+          <button
+            onClick={() => setCobranzaCheques(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-surface-container-lowest text-on-surface text-xs font-bold rounded-lg border border-outline-variant/30 shadow-sm hover:bg-surface-container-low transition-colors"
+          >
+            <Banknote className="w-4 h-4 text-secondary" />
+            Cobranza con cheques
           </button>
           <button
             onClick={() => setNuevo(true)}
@@ -569,6 +579,19 @@ export default function Ingresos() {
         />
       )}
       {detalle.modal}
+      {cobranzaCheques && catalogos.data && (
+        <CobranzaChequesModal
+          clientes={catalogos.data.clientes}
+          clienteInicial={clienteId}
+          tc={catalogos.data.tc}
+          onClose={() => setCobranzaCheques(false)}
+          onSaved={() => {
+            setCobranzaCheques(false);
+            setExpandido(null);
+            reload();
+          }}
+        />
+      )}
       {cobrar && catalogos.data && (
         <CobroModal
           ingreso={cobrar.ingreso}
@@ -1322,7 +1345,8 @@ function CobroModal({
     if (!venc) return;
     if (venc.cuenta_prevista_id && cuentas.some((c) => c.id === venc.cuenta_prevista_id)) setCuentaId(String(venc.cuenta_prevista_id));
     const previsto = (venc.medio_previsto ?? "").toLowerCase();
-    const m = (["transferencia", "efectivo", "deposito", "cheque"] as const).find((x) => previsto.normalize("NFD").replace(/\p{M}/gu, "").startsWith(x));
+    const norm = previsto.normalize("NFD").replace(/\p{M}/gu, "");
+    const m = norm.startsWith("echeq") ? "cheque" : (["transferencia", "efectivo", "deposito", "cheque"] as const).find((x) => norm.startsWith(x));
     if (m && !(m === "cheque" && modo === "cuenta")) setMedio(m);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venc?.id]);
@@ -1533,6 +1557,328 @@ function CobroModal({
         </div>
       )}
       {modo === "cuenta" && <ImputacionPreview items={reparto} moneda={moneda} etiqueta="Venc." total={saldoIngreso - (monto > 0 ? monto : 0)} />}
+      <ErrorBanner message={error} />
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Cobranza con cheques: uno o varios cheques de un cliente que        */
+/* cancelan uno o varios vencimientos (de una o varias facturas).      */
+/* Los cheques entran a cartera y el cash flow los toma en su fecha de */
+/* pago en lugar de los vencimientos que cancelan.                     */
+/* ------------------------------------------------------------------ */
+
+type ChequeForm = {
+  key: number;
+  banco_emisor: string;
+  numero: string;
+  tipo: "echeq" | "fisico";
+  fecha_pago: string;
+  importe: number;
+  librador: string;
+  librador_cuit: string;
+};
+
+type VencCliente = Vencimiento & { ingresos: { descripcion: string | null; fecha_factura: string | null } | null };
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Reparte los cheques (en pesos) sobre los vencimientos elegidos, en orden: misma lógica que registrar_cobranza_cheques. */
+function imputarCheques(cheques: ChequeForm[], vencs: VencCliente[], tc: number) {
+  const saldos = new Map(vencs.map((v) => [v.id!, v.saldo ?? 0]));
+  const aplicado = new Map<number, { importe: number; cheques: string[] }>();
+  for (const ch of cheques) {
+    let resto = r2(ch.importe > 0 ? ch.importe : 0);
+    for (const v of vencs) {
+      if (resto <= 0.009) break;
+      const saldo = saldos.get(v.id!) ?? 0;
+      if (saldo <= 0) continue;
+      const usd = v.moneda === "USD";
+      const saldoArs = usd ? r2(saldo * tc) : saldo;
+      let imputa: number, consume: number;
+      if (resto >= saldoArs - 0.01) {
+        imputa = saldo;
+        consume = Math.min(resto, saldoArs);
+      } else {
+        imputa = usd ? (tc > 0 ? r2(resto / tc) : 0) : resto;
+        consume = resto;
+      }
+      if (imputa <= 0) continue;
+      saldos.set(v.id!, r2(saldo - imputa));
+      const a = aplicado.get(v.id!) ?? { importe: 0, cheques: [] };
+      a.importe = r2(a.importe + imputa);
+      a.cheques.push(ch.numero ? `#${ch.numero}` : "s/n");
+      aplicado.set(v.id!, a);
+      resto = r2(resto - consume);
+    }
+  }
+  return aplicado;
+}
+
+function CobranzaChequesModal({
+  clientes,
+  clienteInicial,
+  tc,
+  onClose,
+  onSaved,
+}: {
+  clientes: { id: number; razon_social: string; cuit: string | null }[];
+  clienteInicial?: string;
+  tc: number | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [clienteId, setClienteId] = useState(clienteInicial ?? "");
+  const cliente = clientes.find((c) => String(c.id) === clienteId);
+  const [fechaC, setFechaC] = useState(hoyISO());
+  const [tcCobro, setTcCobro] = useState(tc ?? NaN);
+  const [elegidos, setElegidos] = useState<Set<number>>(new Set());
+  const [claveCheque, setClaveCheque] = useState(1);
+  const nuevoCheque = (key: number, importe = NaN): ChequeForm => ({
+    key,
+    banco_emisor: "",
+    numero: "",
+    tipo: "echeq",
+    fecha_pago: sumarDias(hoyISO(), 30),
+    importe,
+    librador: cliente?.razon_social ?? "",
+    librador_cuit: cliente?.cuit ?? "",
+  });
+  const [cheques, setCheques] = useState<ChequeForm[]>(() => [nuevoCheque(0)]);
+  const { saving, error, setError, run } = useSubmit();
+
+  const { data: vencs, loading } = useData(async () => {
+    if (!clienteId) return [] as VencCliente[];
+    return check(
+      await supabase
+        .from("v_ingreso_vencimientos")
+        .select("*, ingresos!inner(cliente_id, descripcion, fecha_factura)")
+        .eq("ingresos.cliente_id", Number(clienteId))
+        .gt("saldo", 0)
+        .order("fecha_vencimiento")
+        .order("numero"),
+    ) as unknown as VencCliente[];
+  }, [clienteId]);
+
+  // Al cambiar de cliente: se limpia la selección y se propone el cliente como librador
+  useEffect(() => {
+    setElegidos(new Set());
+    setCheques((l) => l.map((c) => ({ ...c, librador: cliente?.razon_social ?? "", librador_cuit: cliente?.cuit ?? "" })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clienteId]);
+
+  const seleccion = (vencs ?? []).filter((v) => elegidos.has(v.id!));
+  const hayUsd = seleccion.some((v) => v.moneda === "USD");
+  const tcUso = hayUsd && tcCobro > 0 ? tcCobro : 0;
+  const aArs = (v: VencCliente, n: number) => (v.moneda === "USD" ? r2(n * tcUso) : n);
+  const totalElegido = r2(seleccion.reduce((s, v) => s + aArs(v, v.saldo ?? 0), 0));
+  const totalCheques = r2(cheques.reduce((s, c) => s + (c.importe > 0 ? c.importe : 0), 0));
+  const diferencia = r2(totalElegido - totalCheques);
+  const aplicado = imputarCheques(cheques, seleccion, tcUso);
+
+  const cambiarCheque = (key: number, cambios: Partial<ChequeForm>) => setCheques((l) => l.map((c) => (c.key === key ? { ...c, ...cambios } : c)));
+  const agregarCheque = () => {
+    setCheques((l) => [...l, nuevoCheque(claveCheque, diferencia > 0 ? diferencia : NaN)]);
+    setClaveCheque((k) => k + 1);
+  };
+  const alternar = (id: number) =>
+    setElegidos((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
+  const guardar = () =>
+    run(async () => {
+      if (!cliente) return setError("Elegí el cliente");
+      if (seleccion.length === 0) return setError("Marcá los vencimientos que cancelan los cheques");
+      if (hayUsd && !(tcCobro > 0)) return setError("Hay vencimientos en USD: ingresá el tipo de cambio");
+      for (const c of cheques) {
+        if (!c.banco_emisor.trim() || !c.numero.trim() || !c.fecha_pago || !(c.importe > 0))
+          return setError("Completá banco, número, importe y fecha de pago de cada cheque");
+      }
+      const clave = (c: ChequeForm) => `${c.banco_emisor.trim().toLowerCase()}|${c.numero.trim()}`;
+      const repetido = cheques.find((c, i) => cheques.findIndex((d) => clave(d) === clave(c)) !== i);
+      if (repetido) return setError(`El cheque #${repetido.numero} ${repetido.banco_emisor} está cargado dos veces`);
+      if (totalCheques > totalElegido + 0.01)
+        return setError(`Los cheques (${money(totalCheques)}) superan el saldo de los vencimientos marcados (${money(totalElegido)}). Marcá más vencimientos o corregí los importes.`);
+      check(
+        await supabase.rpc("registrar_cobranza_cheques", {
+          p_cliente_id: cliente.id,
+          p_fecha: fechaC,
+          p_cheques: cheques.map((c) => ({
+            banco_emisor: c.banco_emisor.trim(),
+            numero: c.numero.trim(),
+            tipo: c.tipo,
+            fecha_pago: c.fecha_pago,
+            importe: r2(c.importe),
+            librador: c.librador.trim(),
+            librador_cuit: c.librador_cuit.trim(),
+          })),
+          p_vencimientos: seleccion.map((v) => v.id!),
+          p_tc: hayUsd ? tcCobro : undefined,
+        }),
+      );
+      onSaved();
+    });
+
+  const todos = (vencs?.length ?? 0) > 0 && elegidos.size === vencs!.length;
+
+  return (
+    <Modal
+      title="Cobranza con cheques"
+      subtitle="Los cheques entran a cartera y el cash flow los proyecta en su fecha de pago"
+      icon={<Banknote className="w-6 h-6" />}
+      onClose={onClose}
+      size="max-w-4xl"
+      footer={
+        <>
+          <CancelButton onClick={onClose} />
+          <SubmitButton onClick={guardar} saving={saving}>
+            <CheckCircle className="w-4 h-4" />
+            Registrar cobranza
+          </SubmitButton>
+        </>
+      }
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+        <FormGroup label="Cliente *" className="sm:col-span-2">
+          <select className={selectCls} value={clienteId} onChange={(e) => setClienteId(e.target.value)}>
+            <option value="">Elegí un cliente…</option>
+            {clientes.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.razon_social}
+              </option>
+            ))}
+          </select>
+        </FormGroup>
+        <FormGroup label="Fecha de recepción *">
+          <input type="date" className={inputCls} value={fechaC} onChange={(e) => setFechaC(e.target.value)} />
+        </FormGroup>
+      </div>
+
+      {clienteId && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold text-secondary uppercase tracking-widest">Vencimientos que cancela (en orden de imputación)</span>
+            {(vencs?.length ?? 0) > 0 && (
+              <button type="button" className="text-[11px] font-bold text-secondary hover:underline" onClick={() => setElegidos(todos ? new Set() : new Set(vencs!.map((v) => v.id!)))}>
+                {todos ? "Desmarcar todos" : "Marcar todos"}
+              </button>
+            )}
+          </div>
+          {loading ? (
+            <Loading />
+          ) : (vencs?.length ?? 0) === 0 ? (
+            <p className="text-xs text-on-surface-variant p-3 rounded-lg bg-surface-container-low">El cliente no tiene vencimientos pendientes de cobro.</p>
+          ) : (
+            <div className="max-h-64 overflow-y-auto rounded-xl border border-outline-variant/20 divide-y divide-outline-variant/10">
+              {vencs!.map((v) => {
+                const a = aplicado.get(v.id!);
+                const cancela = a && a.importe >= (v.saldo ?? 0) - 0.005;
+                const vencido = (v.fecha_vencimiento ?? "") < hoyISO();
+                return (
+                  <label key={v.id} className={cn("flex items-center gap-3 px-3 py-2 text-xs cursor-pointer hover:bg-surface-container-low", elegidos.has(v.id!) && "bg-secondary/5")}>
+                    <input type="checkbox" checked={elegidos.has(v.id!)} onChange={() => alternar(v.id!)} className="accent-secondary" />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold truncate">
+                        {v.ingresos?.descripcion} • cuota {v.numero}
+                      </div>
+                      <div className={cn("text-[10px]", vencido ? "text-error font-bold" : "text-on-surface-variant")}>
+                        vence {fecha(v.fecha_vencimiento)}
+                        {vencido && " • vencido"}
+                      </div>
+                    </div>
+                    <div className="text-right font-numeric">
+                      <div className="font-bold">{money(v.saldo, v.moneda as Moneda)}</div>
+                      {a && (
+                        <div className={cn("text-[10px] font-bold", cancela ? "text-secondary" : "text-tertiary")}>
+                          {cancela ? "Cancela" : `Parcial ${money(a.importe, v.moneda as Moneda)}`} • {a.cheques.join(", ")}
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          {hayUsd && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-2">
+              <FormGroup label="Tipo de cambio (ARS por USD) *">
+                <MoneyInput value={tcCobro} onChange={setTcCobro} />
+              </FormGroup>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold text-secondary uppercase tracking-widest">Cheques recibidos (en pesos)</span>
+          <button type="button" onClick={agregarCheque} className="inline-flex items-center gap-1 text-[11px] font-bold text-secondary hover:underline">
+            <Plus className="w-3.5 h-3.5" />
+            Agregar cheque
+          </button>
+        </div>
+        {cheques.map((c, idx) => (
+          <div key={c.key} className="p-4 rounded-xl bg-surface-container-low/50 border border-outline-variant/10 grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <div className="sm:col-span-4 flex items-center justify-between -mb-2">
+              <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Cheque {idx + 1}</span>
+              {cheques.length > 1 && (
+                <button type="button" title="Quitar cheque" onClick={() => setCheques((l) => l.filter((x) => x.key !== c.key))} className="p-1 rounded hover:bg-error/10 text-error">
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+            <FormGroup label="Banco emisor *">
+              <input className={inputCls} value={c.banco_emisor} onChange={(e) => cambiarCheque(c.key, { banco_emisor: e.target.value })} />
+            </FormGroup>
+            <FormGroup label="Número *">
+              <input className={inputCls} value={c.numero} onChange={(e) => cambiarCheque(c.key, { numero: e.target.value })} />
+            </FormGroup>
+            <FormGroup label="Tipo">
+              <select className={selectCls} value={c.tipo} onChange={(e) => cambiarCheque(c.key, { tipo: e.target.value as ChequeForm["tipo"] })}>
+                <option value="echeq">eCheq</option>
+                <option value="fisico">Cheque físico</option>
+              </select>
+            </FormGroup>
+            <FormGroup label="Fecha de pago *">
+              <input type="date" className={inputCls} value={c.fecha_pago} onChange={(e) => cambiarCheque(c.key, { fecha_pago: e.target.value })} />
+            </FormGroup>
+            <FormGroup label="Importe * (ARS)">
+              <MoneyInput value={c.importe} onChange={(n) => cambiarCheque(c.key, { importe: n })} />
+              {cheques.length === 1 && totalElegido > 0 && Math.abs(diferencia) > 0.009 && (
+                <button type="button" className="text-[10px] font-bold text-secondary hover:underline text-left" onClick={() => cambiarCheque(c.key, { importe: totalElegido })}>
+                  Usar el total marcado ({money(totalElegido)})
+                </button>
+              )}
+            </FormGroup>
+            <FormGroup label="Librador" className="sm:col-span-2">
+              <input className={inputCls} value={c.librador} onChange={(e) => cambiarCheque(c.key, { librador: e.target.value })} />
+            </FormGroup>
+            <FormGroup label="CUIT librador">
+              <input className={inputCls} value={c.librador_cuit} onChange={(e) => cambiarCheque(c.key, { librador_cuit: e.target.value })} />
+            </FormGroup>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+        <div className="p-3 rounded-lg bg-surface-container-low">
+          <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Total cheques</div>
+          <div className="font-numeric font-bold text-base">{money(totalCheques)}</div>
+        </div>
+        <div className="p-3 rounded-lg bg-surface-container-low">
+          <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Saldo marcado</div>
+          <div className="font-numeric font-bold text-base">{money(totalElegido)}</div>
+        </div>
+        <div className={cn("p-3 rounded-lg", diferencia < -0.01 ? "bg-error/10 text-error" : "bg-surface-container-low")}>
+          <div className="text-[10px] font-bold uppercase tracking-widest">{diferencia < -0.01 ? "Exceso de cheques" : "Queda pendiente"}</div>
+          <div className="font-numeric font-bold text-base">{money(Math.abs(diferencia))}</div>
+        </div>
+      </div>
       <ErrorBanner message={error} />
     </Modal>
   );

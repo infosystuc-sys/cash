@@ -922,6 +922,7 @@ export type Database = {
           cuenta_deposito: string | null
           cuenta_deposito_id: number | null
           dias_para_pago: number | null
+          cobros_count: number | null
           egreso_id: number | null
           estado: Database["public"]["Enums"]["estado_cheque"] | null
           fecha_deposito: string | null
@@ -1536,6 +1537,16 @@ export type Database = {
           p_ingreso_id: number
           p_medio: Database["public"]["Enums"]["medio_cobro"]
           p_tc?: number
+        }
+        Returns: number
+      }
+      registrar_cobranza_cheques: {
+        Args: {
+          p_cheques: Json
+          p_cliente_id: number
+          p_fecha: string
+          p_tc?: number
+          p_vencimientos: number[]
         }
         Returns: number
       }
