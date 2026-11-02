@@ -105,16 +105,16 @@ export default function Ingresos() {
     let q = supabase.from("v_ingresos").select("*").order("fecha_factura", { ascending: false }).order("id", { ascending: false });
     if (desde) q = q.gte("fecha_factura", desde);
     if (hasta) q = q.lte("fecha_factura", hasta);
-    const [ingresos, vencidas, pendientes] = await Promise.all([
+    const [ingresos, conSaldo, pendientes] = await Promise.all([
       q,
-      // Vencido impago: todo lo atrasado, sin importar el mes de la factura
-      supabase.from("v_ingresos").select("*").eq("estado", "vencido").order("fecha_factura", { ascending: false }).order("id", { ascending: false }),
+      // Facturas con saldo de cualquier mes: lo vencido y lo pendiente de cobro que arrastran meses anteriores
+      supabase.from("v_ingresos").select("*").gt("saldo", 0).order("fecha_factura", { ascending: false }).order("id", { ascending: false }),
       // Importe de cada vencimiento con saldo, para mostrar el importe de la próxima cuota junto a su saldo
       supabase.from("v_ingreso_vencimientos").select("ingreso_id, numero, importe").gt("saldo", 0),
     ]);
     const importes = new Map(check(pendientes).map((v) => [`${v.ingreso_id}-${v.numero}`, v.importe]));
     const conImporte = (l: Row<"v_ingresos">[]) => l.map((i) => ({ ...i, proximo_importe: importes.get(`${i.id}-${i.proxima_cuota}`) ?? null }));
-    return { ingresos: conImporte(check(ingresos)), vencidas: conImporte(check(vencidas)) };
+    return { ingresos: conImporte(check(ingresos)), conSaldo: conImporte(check(conSaldo)) };
   }, [desde, hasta]);
   const data = cargado?.ingresos;
 
@@ -177,14 +177,19 @@ export default function Ingresos() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const base = useMemo(() => filtrar(data ?? []), [data, busqueda, clienteId, tipoId]);
-  // Vencidas de cualquier mes (no dependen del filtro de período)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const vencidas = useMemo(() => filtrar(cargado?.vencidas ?? []), [cargado, busqueda, clienteId, tipoId]);
+  const conSaldo = useMemo(() => filtrar(cargado?.conSaldo ?? []), [cargado, busqueda, clienteId, tipoId]);
+  // Vencidas de cualquier mes (no dependen del filtro de período)
+  const vencidas = useMemo(() => conSaldo.filter((i) => i.estado === "vencido"), [conSaldo]);
+  // Facturas de meses anteriores al período que siguen con saldo: se arrastran al listado
+  const arrastre = useMemo(() => (desde ? conSaldo.filter((i) => (i.fecha_factura ?? "") < desde) : []), [conSaldo, desde]);
+  const esArrastre = (i: Ingreso) => !!desde && (i.fecha_factura ?? "") < desde;
+  const visibles = useMemo(() => [...base, ...arrastre], [base, arrastre]);
 
   const filas =
     estado === "vencidos"
       ? vencidas
-      : base.filter((i) => {
+      : visibles.filter((i) => {
           if (estado === "pendientes") return i.estado === "pendiente" || i.estado === "cobrado_parcial";
           if (estado === "cobrados") return i.estado === "cobrado";
           return true;
@@ -207,7 +212,7 @@ export default function Ingresos() {
     const total = base.reduce((s, i) => s + ars(i, i.importe_total), 0);
     const cobrado = base.reduce((s, i) => s + ars(i, i.cobrado), 0);
     const vencido = vencidas.reduce((s, i) => s + ars(i, i.saldo), 0);
-    const enTermino = base.filter((i) => i.estado === "pendiente" || i.estado === "cobrado_parcial");
+    const enTermino = visibles.filter((i) => i.estado === "pendiente" || i.estado === "cobrado_parcial");
     return {
       total,
       cobrado,
@@ -217,7 +222,7 @@ export default function Ingresos() {
       cantVencidos: vencidas.length,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, vencidas, tc]);
+  }, [base, visibles, vencidas, tc]);
 
   async function eliminar(i: Ingreso) {
     if ((i.cobrado ?? 0) > 0) return alert("No se puede eliminar un ingreso con cobros registrados.");
@@ -352,8 +357,8 @@ export default function Ingresos() {
           onClick={() =>
             detalle.abrir({
               titulo: "Por Cobrar en Término",
-              subtitulo: "Facturas pendientes o con cobro parcial, sin vencimientos atrasados",
-              filas: base.filter((i) => i.estado === "pendiente" || i.estado === "cobrado_parcial"),
+              subtitulo: "Facturas pendientes o con cobro parcial, sin vencimientos atrasados (incluye las de meses anteriores con saldo)",
+              filas: visibles.filter((i) => i.estado === "pendiente" || i.estado === "cobrado_parcial"),
               columnas: colsIngreso("Saldo", (i) => i.saldo),
               total: money(kpi.enTermino),
             })
@@ -494,6 +499,7 @@ export default function Ingresos() {
                   <React.Fragment key={i.id}>
                     <InvoiceRow
                       ingreso={i}
+                      anterior={esArrastre(i)}
                       expandido={expandido === i.id}
                       onToggle={() => setExpandido(expandido === i.id ? null : i.id!)}
                       onCobrar={() => setCobrar({ ingreso: i })}
@@ -512,8 +518,21 @@ export default function Ingresos() {
         <div className="p-4 bg-surface-container-low/30 flex items-center justify-between border-t border-outline-variant/10">
           <span className="text-[10px] text-on-surface-variant font-medium">
             Mostrando <span className="font-bold text-on-surface">{filas.length}</span> de{" "}
-            <span className="font-bold text-on-surface">{estado === "vencidos" ? `${cargado?.vencidas.length ?? 0} facturas vencidas` : `${data?.length ?? 0} facturas`}</span>
-            {estado === "vencidos" ? " de cualquier mes" : " del período"}
+            {estado === "vencidos" ? (
+              <>
+                <span className="font-bold text-on-surface">{vencidas.length} facturas vencidas</span> de cualquier mes
+              </>
+            ) : (
+              <>
+                <span className="font-bold text-on-surface">{data?.length ?? 0} facturas</span> del período
+                {arrastre.length > 0 && (
+                  <>
+                    {" "}
+                    + <span className="font-bold text-on-surface">{arrastre.length}</span> de meses anteriores con saldo
+                  </>
+                )}
+              </>
+            )}
           </span>
         </div>
       </div>
@@ -631,6 +650,7 @@ function FilterSelect({ value, onChange, children }: { value: string; onChange: 
 
 function InvoiceRow({
   ingreso: i,
+  anterior,
   expandido,
   onToggle,
   onCobrar,
@@ -638,6 +658,8 @@ function InvoiceRow({
   onEditar,
 }: {
   ingreso: Ingreso;
+  /** Factura de un mes anterior al período que sigue con saldo */
+  anterior: boolean;
   expandido: boolean;
   onToggle: () => void;
   onCobrar: () => void;
@@ -674,7 +696,12 @@ function InvoiceRow({
           {i.comprobante && <span className="text-[9px] font-bold text-outline uppercase">{i.comprobante}</span>}
         </div>
       </td>
-      <td className="px-4 py-4 text-center font-numeric text-on-surface-variant font-medium">{fecha(i.fecha_factura)}</td>
+      <td className="px-4 py-4 text-center font-numeric text-on-surface-variant font-medium">
+        <div className="flex flex-col items-center">
+          {fecha(i.fecha_factura)}
+          {anterior && <span className="px-1.5 py-0.5 rounded bg-surface-container-high text-[8px] font-bold uppercase text-on-surface-variant whitespace-nowrap">Saldo mes anterior</span>}
+        </div>
+      </td>
       <td className="px-4 py-4 text-center">
         <span className="px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface text-[9px] font-bold">{moneda}</span>
       </td>
