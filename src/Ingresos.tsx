@@ -1333,7 +1333,7 @@ function CobroModal({
   const [medio, setMedio] = useState<"transferencia" | "efectivo" | "deposito" | "cheque">("transferencia");
   const [cuentaId, setCuentaId] = useState(String(cuentas.find((c) => c.moneda === moneda)?.id ?? cuentas[0]?.id ?? ""));
   const [tcCobro, setTcCobro] = useState(tc ?? NaN);
-  const [ch, setCh] = useState({ banco_emisor: "", numero: "", tipo: "echeq", fecha_pago: sumarDias(hoyISO(), 30), librador: ingreso.cliente ?? "", librador_cuit: ingreso.cliente_cuit ?? "" });
+  const [cheques, setCheques] = useState<ChequeForm[]>(() => [chequeVacio(0, ingreso.cliente ?? "", ingreso.cliente_cuit ?? "")]);
   const { saving, error, setError, run } = useSubmit();
 
   useEffect(() => {
@@ -1347,14 +1347,9 @@ function CobroModal({
     const previsto = (venc.medio_previsto ?? "").toLowerCase();
     const norm = previsto.normalize("NFD").replace(/\p{M}/gu, "");
     const m = norm.startsWith("echeq") ? "cheque" : (["transferencia", "efectivo", "deposito", "cheque"] as const).find((x) => norm.startsWith(x));
-    if (m && !(m === "cheque" && modo === "cuenta")) setMedio(m);
+    if (m) setMedio(m);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [venc?.id]);
-
-  // Un cheque queda asociado a un único cobro: no se puede repartir entre vencimientos
-  useEffect(() => {
-    if (modo === "cuenta" && medio === "cheque") setMedio("transferencia");
-  }, [modo, medio]);
 
   // Deuda en USD cobrada en pesos: se ingresan los pesos recibidos y se imputa su equivalente en USD
   const [monedaCobro, setMonedaCobro] = useState<Moneda>(moneda);
@@ -1383,8 +1378,48 @@ function CobroModal({
   const cuenta = cuentas.find((c) => String(c.id) === cuentaId);
   const necesitaTc = enPesos || (medio === "cheque" ? moneda === "USD" : cuenta && cuenta.moneda !== moneda);
 
+  // Cobro con cheques: uno o varios cheques en pesos; se imputan desde el vencimiento elegido y,
+  // si sobra, siguen con los demás en orden de vencimiento. Lo que no cubren queda pendiente.
+  const esCheque = medio === "cheque";
+  const ordenImputacion = venc
+    ? [venc, ...(vencs ?? []).filter((v) => v.id !== venc.id).sort((a, b) => (a.fecha_vencimiento ?? "").localeCompare(b.fecha_vencimiento ?? "") || (a.numero ?? 0) - (b.numero ?? 0))]
+    : [];
+  const tcCheque = moneda === "USD" && tcCobro > 0 ? tcCobro : 0;
+  const aArsVto = (n: number) => (moneda === "USD" ? Math.round(n * tcCheque * 100) / 100 : n);
+  const totalCheques = Math.round(cheques.reduce((s, c) => s + (c.importe > 0 ? c.importe : 0), 0) * 100) / 100;
+  const saldoVencArs = aArsVto(venc?.saldo ?? 0);
+
+  const guardarCheques = async () => {
+    if (!venc) return setError("No hay vencimientos pendientes");
+    if (moneda === "USD" && !(tcCobro > 0)) return setError("Ingresá el tipo de cambio");
+    const falta = validarCheques(cheques);
+    if (falta) return setError(falta);
+    const saldoIngresoArs = aArsVto(saldoIngreso);
+    if (totalCheques > saldoIngresoArs + 0.01)
+      return setError(`Los cheques (${money(totalCheques)}) superan el saldo pendiente del ingreso (${money(saldoIngresoArs)})`);
+    // Solo los vencimientos que efectivamente alcanzan a cubrir los cheques
+    const ids: number[] = [];
+    let resto = totalCheques;
+    for (const v of ordenImputacion) {
+      if (resto <= 0.009) break;
+      ids.push(v.id!);
+      resto -= aArsVto(v.saldo ?? 0);
+    }
+    check(
+      await supabase.rpc("registrar_cobranza_cheques", {
+        p_cliente_id: ingreso.cliente_id!,
+        p_fecha: fechaC,
+        p_cheques: chequesPayload(cheques),
+        p_vencimientos: ids,
+        p_tc: moneda === "USD" ? tcCobro : undefined,
+      }),
+    );
+    onSaved();
+  };
+
   const guardar = () =>
     run(async () => {
+      if (esCheque) return guardarCheques();
       if (!venc) return setError("No hay vencimientos pendientes");
       if (enPesos && !(pesos > 0)) return setError("Ingresá los pesos cobrados");
       if (enPesos && modo !== "total" && !(tcCobro > 0)) return setError("Ingresá el tipo de cambio");
@@ -1393,9 +1428,8 @@ function CobroModal({
         return setError(`Un cobro parcial debe ser menor al saldo del vencimiento (${money(venc.saldo, moneda)}). Para cancelarlo elegí "Total".`);
       if (modo === "cuenta" && monto > saldoIngreso) return setError(`Supera el saldo pendiente del ingreso (${money(saldoIngreso, moneda)})`);
       if (necesitaTc && !(tcFinal > 0)) return setError("Ingresá el tipo de cambio");
-      if (enPesos && cuenta?.moneda !== "ARS" && medio !== "cheque") return setError("Un cobro en pesos se acredita en una cuenta en pesos");
-      if (medio === "cheque" && (!ch.banco_emisor.trim() || !ch.numero.trim() || !ch.fecha_pago)) return setError("Completá banco, número y fecha de pago del cheque");
-      if (medio !== "cheque" && !cuenta) return setError("Elegí la cuenta destino");
+      if (enPesos && cuenta?.moneda !== "ARS") return setError("Un cobro en pesos se acredita en una cuenta en pesos");
+      if (!cuenta) return setError("Elegí la cuenta destino");
       if (modo === "cuenta") {
         check(
           await supabase.rpc("registrar_cobro_a_cuenta", {
@@ -1415,9 +1449,8 @@ function CobroModal({
           p_fecha: fechaC,
           p_importe: monto,
           p_medio: medio,
-          p_cuenta_id: medio === "cheque" ? undefined : cuenta!.id,
+          p_cuenta_id: cuenta!.id,
           p_tc: necesitaTc || moneda === "USD" ? tcFinal : undefined,
-          p_cheque: medio === "cheque" ? ch : undefined,
         }),
       );
       onSaved();
@@ -1429,6 +1462,7 @@ function CobroModal({
       subtitle={`${ingreso.cliente} • ${ingreso.descripcion} • saldo ${money(saldoIngreso, moneda)}`}
       icon={<CreditCard className="w-6 h-6" />}
       onClose={onClose}
+      size={esCheque ? "max-w-4xl" : undefined}
       footer={
         <>
           <CancelButton onClick={onClose} />
@@ -1439,10 +1473,10 @@ function CobroModal({
         </>
       }
     >
-      <ModoImputacionSelector value={modo} onChange={setModo} etiqueta="vencimiento" cuentaDeshabilitada={(vencs?.length ?? 0) < 2} />
+      {!esCheque && <ModoImputacionSelector value={modo} onChange={setModo} etiqueta="vencimiento" cuentaDeshabilitada={(vencs?.length ?? 0) < 2} />}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-        {modo !== "cuenta" && (
-          <FormGroup label="Vencimiento *" className="sm:col-span-2">
+        {(modo !== "cuenta" || esCheque) && (
+          <FormGroup label={esCheque ? "Imputar desde el vencimiento *" : "Vencimiento *"} className="sm:col-span-2">
             <select className={selectCls} value={venc ? String(venc.id) : ""} onChange={(e) => setVencId(e.target.value)}>
               {vencs?.map((v) => (
                 <option key={v.id} value={v.id!}>
@@ -1456,7 +1490,7 @@ function CobroModal({
         <FormGroup label="Fecha de cobro *">
           <input type="date" className={inputCls} value={fechaC} onChange={(e) => setFechaC(e.target.value)} />
         </FormGroup>
-        {moneda === "USD" && (
+        {moneda === "USD" && !esCheque && (
           <FormGroup label="Moneda en que cobrás" className="sm:col-span-2">
             <Segmented
               value={monedaCobro}
@@ -1468,7 +1502,7 @@ function CobroModal({
             />
           </FormGroup>
         )}
-        {enPesos ? (
+        {esCheque ? null : enPesos ? (
           <FormGroup label="Pesos cobrados * (ARS)">
             <MoneyInput value={pesos} onChange={setPesos} />
             {Number.isFinite(monto) && monto > 0 && (
@@ -1502,9 +1536,7 @@ function CobroModal({
             <option value="transferencia">Transferencia</option>
             <option value="deposito">Depósito</option>
             <option value="efectivo">Efectivo</option>
-            <option value="cheque" disabled={modo === "cuenta"}>
-              Cheque / eCheq (entra a cartera){modo === "cuenta" && " — no disponible a cuenta"}
-            </option>
+            <option value="cheque">Cheque / eCheq (uno o varios, entran a cartera)</option>
           </select>
         </FormGroup>
         {medio !== "cheque" && (
@@ -1518,45 +1550,45 @@ function CobroModal({
             </select>
           </FormGroup>
         )}
-        {(necesitaTc || moneda === "USD") && !(enPesos && modo === "total") && (
+        {(necesitaTc || moneda === "USD") && (esCheque || !(enPesos && modo === "total")) && (
           <FormGroup label="Tipo de cambio (ARS por USD) *">
             <MoneyInput value={tcCobro} onChange={setTcCobro} />
           </FormGroup>
         )}
       </div>
 
-      {medio === "cheque" && (
-        <div className="p-4 rounded-xl bg-surface-container-low/50 border border-outline-variant/10 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <span className="sm:col-span-2 text-[10px] font-bold text-secondary uppercase tracking-widest">Datos del cheque</span>
-          <FormGroup label="Banco emisor *">
-            <input className={inputCls} value={ch.banco_emisor} onChange={(e) => setCh({ ...ch, banco_emisor: e.target.value })} />
-          </FormGroup>
-          <FormGroup label="Número *">
-            <input className={inputCls} value={ch.numero} onChange={(e) => setCh({ ...ch, numero: e.target.value })} />
-          </FormGroup>
-          <FormGroup label="Tipo">
-            <select className={selectCls} value={ch.tipo} onChange={(e) => setCh({ ...ch, tipo: e.target.value })}>
-              <option value="echeq">eCheq</option>
-              <option value="fisico">Cheque físico</option>
-            </select>
-          </FormGroup>
-          <FormGroup label="Fecha de pago *">
-            <input type="date" className={inputCls} value={ch.fecha_pago} onChange={(e) => setCh({ ...ch, fecha_pago: e.target.value })} />
-          </FormGroup>
-          <FormGroup label="Librador">
-            <input className={inputCls} value={ch.librador} onChange={(e) => setCh({ ...ch, librador: e.target.value })} />
-          </FormGroup>
-          <FormGroup label="CUIT librador">
-            <input className={inputCls} value={ch.librador_cuit} onChange={(e) => setCh({ ...ch, librador_cuit: e.target.value })} />
-          </FormGroup>
-          {moneda === "USD" && Number.isFinite(monto) && tcFinal > 0 && (
-            <p className="sm:col-span-2 text-[11px] text-on-surface-variant">
-              Importe del cheque: <strong className="font-numeric">{money(monto * tcFinal)}</strong>
-            </p>
-          )}
-        </div>
+      {esCheque && (
+        <>
+          <ChequesEditor
+            cheques={cheques}
+            onChange={setCheques}
+            objetivo={saldoVencArs}
+            etiquetaObjetivo="el saldo del vencimiento"
+            librador={ingreso.cliente ?? ""}
+            libradorCuit={ingreso.cliente_cuit ?? ""}
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div className="p-3 rounded-lg bg-surface-container-low">
+              <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Total cheques</div>
+              <div className="font-numeric font-bold text-base">{money(totalCheques)}</div>
+            </div>
+            <div className="p-3 rounded-lg bg-surface-container-low">
+              <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Saldo del vencimiento</div>
+              <div className="font-numeric font-bold text-base">{money(saldoVencArs)}</div>
+            </div>
+            <div className={cn("p-3 rounded-lg", totalCheques > aArsVto(saldoIngreso) + 0.01 ? "bg-error/10 text-error" : "bg-surface-container-low")}>
+              <div className="text-[10px] font-bold uppercase tracking-widest">
+                {totalCheques > saldoVencArs + 0.01 ? (totalCheques > aArsVto(saldoIngreso) + 0.01 ? "Excede el saldo del ingreso" : "Pasa al próximo vencimiento") : "Queda pendiente"}
+              </div>
+              <div className="font-numeric font-bold text-base">{money(Math.abs(saldoVencArs - totalCheques))}</div>
+            </div>
+          </div>
+          <p className="text-[11px] text-on-surface-variant">
+            El importe cobrado es la suma de los cheques: si no alcanza, el resto del vencimiento queda pendiente de cobro. El cash flow toma cada cheque en su fecha de pago.
+          </p>
+        </>
       )}
-      {modo === "cuenta" && <ImputacionPreview items={reparto} moneda={moneda} etiqueta="Venc." total={saldoIngreso - (monto > 0 ? monto : 0)} />}
+      {modo === "cuenta" && !esCheque && <ImputacionPreview items={reparto} moneda={moneda} etiqueta="Venc." total={saldoIngreso - (monto > 0 ? monto : 0)} />}
       <ErrorBanner message={error} />
     </Modal>
   );
@@ -1583,6 +1615,116 @@ type ChequeForm = {
 type VencCliente = Vencimiento & { ingresos: { descripcion: string | null; fecha_factura: string | null } | null };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+
+const chequeVacio = (key: number, librador: string, libradorCuit: string, importe = NaN): ChequeForm => ({
+  key,
+  banco_emisor: "",
+  numero: "",
+  tipo: "echeq",
+  fecha_pago: sumarDias(hoyISO(), 30),
+  importe,
+  librador,
+  librador_cuit: libradorCuit,
+});
+
+/** Devuelve el error a mostrar, o null si los cheques están completos y sin repetidos. */
+function validarCheques(cheques: ChequeForm[]): string | null {
+  if (cheques.length === 0) return "Cargá al menos un cheque";
+  for (const c of cheques) {
+    if (!c.banco_emisor.trim() || !c.numero.trim() || !c.fecha_pago || !(c.importe > 0)) return "Completá banco, número, importe y fecha de pago de cada cheque";
+  }
+  const clave = (c: ChequeForm) => `${c.banco_emisor.trim().toLowerCase()}|${c.numero.trim()}`;
+  const repetido = cheques.find((c, i) => cheques.findIndex((d) => clave(d) === clave(c)) !== i);
+  return repetido ? `El cheque #${repetido.numero} ${repetido.banco_emisor} está cargado dos veces` : null;
+}
+
+const chequesPayload = (cheques: ChequeForm[]) =>
+  cheques.map((c) => ({
+    banco_emisor: c.banco_emisor.trim(),
+    numero: c.numero.trim(),
+    tipo: c.tipo,
+    fecha_pago: c.fecha_pago,
+    importe: r2(c.importe),
+    librador: c.librador.trim(),
+    librador_cuit: c.librador_cuit.trim(),
+  }));
+
+/** Carga de uno o varios cheques (en pesos). objetivo: importe a cubrir, para proponer lo que falta. */
+function ChequesEditor({
+  cheques,
+  onChange,
+  objetivo,
+  etiquetaObjetivo,
+  librador,
+  libradorCuit,
+}: {
+  cheques: ChequeForm[];
+  onChange: (l: ChequeForm[]) => void;
+  objetivo: number;
+  etiquetaObjetivo: string;
+  librador: string;
+  libradorCuit: string;
+}) {
+  const total = r2(cheques.reduce((s, c) => s + (c.importe > 0 ? c.importe : 0), 0));
+  const falta = r2(objetivo - total);
+  const cambiar = (key: number, cambios: Partial<ChequeForm>) => onChange(cheques.map((c) => (c.key === key ? { ...c, ...cambios } : c)));
+  const agregar = () => onChange([...cheques, chequeVacio(Math.max(0, ...cheques.map((c) => c.key)) + 1, librador, libradorCuit, falta > 0 ? falta : NaN)]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-bold text-secondary uppercase tracking-widest">
+          Cheques recibidos (en pesos) • {cheques.length} {cheques.length === 1 ? "cheque" : "cheques"}
+        </span>
+        <button type="button" onClick={agregar} className="inline-flex items-center gap-1 text-[11px] font-bold text-secondary hover:underline">
+          <Plus className="w-3.5 h-3.5" />
+          Agregar otro cheque
+        </button>
+      </div>
+      {cheques.map((c, idx) => (
+        <div key={c.key} className="p-4 rounded-xl bg-surface-container-low/50 border border-outline-variant/10 grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="sm:col-span-4 flex items-center justify-between -mb-2">
+            <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Cheque {idx + 1}</span>
+            {cheques.length > 1 && (
+              <button type="button" title="Quitar cheque" onClick={() => onChange(cheques.filter((x) => x.key !== c.key))} className="p-1 rounded hover:bg-error/10 text-error">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <FormGroup label="Banco emisor *">
+            <input className={inputCls} value={c.banco_emisor} onChange={(e) => cambiar(c.key, { banco_emisor: e.target.value })} />
+          </FormGroup>
+          <FormGroup label="Número *">
+            <input className={inputCls} value={c.numero} onChange={(e) => cambiar(c.key, { numero: e.target.value })} />
+          </FormGroup>
+          <FormGroup label="Tipo">
+            <select className={selectCls} value={c.tipo} onChange={(e) => cambiar(c.key, { tipo: e.target.value as ChequeForm["tipo"] })}>
+              <option value="echeq">eCheq</option>
+              <option value="fisico">Cheque físico</option>
+            </select>
+          </FormGroup>
+          <FormGroup label="Fecha de pago *">
+            <input type="date" className={inputCls} value={c.fecha_pago} onChange={(e) => cambiar(c.key, { fecha_pago: e.target.value })} />
+          </FormGroup>
+          <FormGroup label="Importe del cheque * (ARS)">
+            <MoneyInput value={c.importe} onChange={(n) => cambiar(c.key, { importe: n })} />
+            {cheques.length === 1 && objetivo > 0 && Math.abs(falta) > 0.009 && (
+              <button type="button" className="text-[10px] font-bold text-secondary hover:underline text-left" onClick={() => cambiar(c.key, { importe: objetivo })}>
+                Usar {etiquetaObjetivo} ({money(objetivo)})
+              </button>
+            )}
+          </FormGroup>
+          <FormGroup label="Librador" className="sm:col-span-2">
+            <input className={inputCls} value={c.librador} onChange={(e) => cambiar(c.key, { librador: e.target.value })} />
+          </FormGroup>
+          <FormGroup label="CUIT librador">
+            <input className={inputCls} value={c.librador_cuit} onChange={(e) => cambiar(c.key, { librador_cuit: e.target.value })} />
+          </FormGroup>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Reparte los cheques (en pesos) sobre los vencimientos elegidos, en orden: misma lógica que registrar_cobranza_cheques. */
 function imputarCheques(cheques: ChequeForm[], vencs: VencCliente[], tc: number) {
@@ -1634,18 +1776,7 @@ function CobranzaChequesModal({
   const [fechaC, setFechaC] = useState(hoyISO());
   const [tcCobro, setTcCobro] = useState(tc ?? NaN);
   const [elegidos, setElegidos] = useState<Set<number>>(new Set());
-  const [claveCheque, setClaveCheque] = useState(1);
-  const nuevoCheque = (key: number, importe = NaN): ChequeForm => ({
-    key,
-    banco_emisor: "",
-    numero: "",
-    tipo: "echeq",
-    fecha_pago: sumarDias(hoyISO(), 30),
-    importe,
-    librador: cliente?.razon_social ?? "",
-    librador_cuit: cliente?.cuit ?? "",
-  });
-  const [cheques, setCheques] = useState<ChequeForm[]>(() => [nuevoCheque(0)]);
+  const [cheques, setCheques] = useState<ChequeForm[]>(() => [chequeVacio(0, cliente?.razon_social ?? "", cliente?.cuit ?? "")]);
   const { saving, error, setError, run } = useSubmit();
 
   const { data: vencs, loading } = useData(async () => {
@@ -1677,11 +1808,6 @@ function CobranzaChequesModal({
   const diferencia = r2(totalElegido - totalCheques);
   const aplicado = imputarCheques(cheques, seleccion, tcUso);
 
-  const cambiarCheque = (key: number, cambios: Partial<ChequeForm>) => setCheques((l) => l.map((c) => (c.key === key ? { ...c, ...cambios } : c)));
-  const agregarCheque = () => {
-    setCheques((l) => [...l, nuevoCheque(claveCheque, diferencia > 0 ? diferencia : NaN)]);
-    setClaveCheque((k) => k + 1);
-  };
   const alternar = (id: number) =>
     setElegidos((s) => {
       const n = new Set(s);
@@ -1695,28 +1821,15 @@ function CobranzaChequesModal({
       if (!cliente) return setError("Elegí el cliente");
       if (seleccion.length === 0) return setError("Marcá los vencimientos que cancelan los cheques");
       if (hayUsd && !(tcCobro > 0)) return setError("Hay vencimientos en USD: ingresá el tipo de cambio");
-      for (const c of cheques) {
-        if (!c.banco_emisor.trim() || !c.numero.trim() || !c.fecha_pago || !(c.importe > 0))
-          return setError("Completá banco, número, importe y fecha de pago de cada cheque");
-      }
-      const clave = (c: ChequeForm) => `${c.banco_emisor.trim().toLowerCase()}|${c.numero.trim()}`;
-      const repetido = cheques.find((c, i) => cheques.findIndex((d) => clave(d) === clave(c)) !== i);
-      if (repetido) return setError(`El cheque #${repetido.numero} ${repetido.banco_emisor} está cargado dos veces`);
+      const falta = validarCheques(cheques);
+      if (falta) return setError(falta);
       if (totalCheques > totalElegido + 0.01)
         return setError(`Los cheques (${money(totalCheques)}) superan el saldo de los vencimientos marcados (${money(totalElegido)}). Marcá más vencimientos o corregí los importes.`);
       check(
         await supabase.rpc("registrar_cobranza_cheques", {
           p_cliente_id: cliente.id,
           p_fecha: fechaC,
-          p_cheques: cheques.map((c) => ({
-            banco_emisor: c.banco_emisor.trim(),
-            numero: c.numero.trim(),
-            tipo: c.tipo,
-            fecha_pago: c.fecha_pago,
-            importe: r2(c.importe),
-            librador: c.librador.trim(),
-            librador_cuit: c.librador_cuit.trim(),
-          })),
+          p_cheques: chequesPayload(cheques),
           p_vencimientos: seleccion.map((v) => v.id!),
           p_tc: hayUsd ? tcCobro : undefined,
         }),
@@ -1814,56 +1927,14 @@ function CobranzaChequesModal({
         </div>
       )}
 
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-bold text-secondary uppercase tracking-widest">Cheques recibidos (en pesos)</span>
-          <button type="button" onClick={agregarCheque} className="inline-flex items-center gap-1 text-[11px] font-bold text-secondary hover:underline">
-            <Plus className="w-3.5 h-3.5" />
-            Agregar cheque
-          </button>
-        </div>
-        {cheques.map((c, idx) => (
-          <div key={c.key} className="p-4 rounded-xl bg-surface-container-low/50 border border-outline-variant/10 grid grid-cols-1 sm:grid-cols-4 gap-4">
-            <div className="sm:col-span-4 flex items-center justify-between -mb-2">
-              <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Cheque {idx + 1}</span>
-              {cheques.length > 1 && (
-                <button type="button" title="Quitar cheque" onClick={() => setCheques((l) => l.filter((x) => x.key !== c.key))} className="p-1 rounded hover:bg-error/10 text-error">
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-            <FormGroup label="Banco emisor *">
-              <input className={inputCls} value={c.banco_emisor} onChange={(e) => cambiarCheque(c.key, { banco_emisor: e.target.value })} />
-            </FormGroup>
-            <FormGroup label="Número *">
-              <input className={inputCls} value={c.numero} onChange={(e) => cambiarCheque(c.key, { numero: e.target.value })} />
-            </FormGroup>
-            <FormGroup label="Tipo">
-              <select className={selectCls} value={c.tipo} onChange={(e) => cambiarCheque(c.key, { tipo: e.target.value as ChequeForm["tipo"] })}>
-                <option value="echeq">eCheq</option>
-                <option value="fisico">Cheque físico</option>
-              </select>
-            </FormGroup>
-            <FormGroup label="Fecha de pago *">
-              <input type="date" className={inputCls} value={c.fecha_pago} onChange={(e) => cambiarCheque(c.key, { fecha_pago: e.target.value })} />
-            </FormGroup>
-            <FormGroup label="Importe * (ARS)">
-              <MoneyInput value={c.importe} onChange={(n) => cambiarCheque(c.key, { importe: n })} />
-              {cheques.length === 1 && totalElegido > 0 && Math.abs(diferencia) > 0.009 && (
-                <button type="button" className="text-[10px] font-bold text-secondary hover:underline text-left" onClick={() => cambiarCheque(c.key, { importe: totalElegido })}>
-                  Usar el total marcado ({money(totalElegido)})
-                </button>
-              )}
-            </FormGroup>
-            <FormGroup label="Librador" className="sm:col-span-2">
-              <input className={inputCls} value={c.librador} onChange={(e) => cambiarCheque(c.key, { librador: e.target.value })} />
-            </FormGroup>
-            <FormGroup label="CUIT librador">
-              <input className={inputCls} value={c.librador_cuit} onChange={(e) => cambiarCheque(c.key, { librador_cuit: e.target.value })} />
-            </FormGroup>
-          </div>
-        ))}
-      </div>
+      <ChequesEditor
+        cheques={cheques}
+        onChange={setCheques}
+        objetivo={totalElegido}
+        etiquetaObjetivo="el total marcado"
+        librador={cliente?.razon_social ?? ""}
+        libradorCuit={cliente?.cuit ?? ""}
+      />
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
         <div className="p-3 rounded-lg bg-surface-container-low">
