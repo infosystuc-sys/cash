@@ -923,6 +923,12 @@ export type Database = {
           cuenta_deposito_id: number | null
           dias_para_pago: number | null
           cobros_count: number | null
+          cambio_detalle: string | null
+          cambio_egreso_id: number | null
+          cambio_interes: number | null
+          cambio_proveedor: string | null
+          cambio_proveedor_id: number | null
+          fecha_cambio: string | null
           egreso_id: number | null
           estado: Database["public"]["Enums"]["estado_cheque"] | null
           fecha_deposito: string | null
@@ -1394,6 +1400,24 @@ export type Database = {
         }
         Returns: undefined
       }
+      anular_cambio_cheque: {
+        Args: { p_cheque_id: number }
+        Returns: undefined
+      }
+      cambiar_cheque: {
+        Args: {
+          p_categoria_egreso_id: number | null
+          p_cheque_id: number
+          p_cuenta_efectivo_id: number | null
+          p_cuenta_transferencia_id: number | null
+          p_efectivo: number
+          p_fecha: string
+          p_interes: number
+          p_proveedor_id?: number
+          p_transferencia: number
+        }
+        Returns: undefined
+      }
       actualizar_deuda_cuota: {
         Args: { p_cuota_id: number; p_fecha_vencimiento: string; p_importe: number }
         Returns: undefined
@@ -1567,7 +1591,7 @@ export type Database = {
       tc_actual: { Args: never; Returns: number }
     }
     Enums: {
-      estado_cheque: "en_cartera" | "endosado" | "depositado" | "rechazado"
+      estado_cheque: "en_cartera" | "endosado" | "depositado" | "rechazado" | "cambiado"
       forma_pago_deuda: "unico" | "cuotas"
       medio_cobro: "transferencia" | "efectivo" | "deposito" | "cheque"
       medio_pago:
@@ -1712,7 +1736,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      estado_cheque: ["en_cartera", "endosado", "depositado", "rechazado"],
+      estado_cheque: ["en_cartera", "endosado", "depositado", "rechazado", "cambiado"],
       forma_pago_deuda: ["unico", "cuotas"],
       medio_cobro: ["transferencia", "efectivo", "deposito", "cheque"],
       medio_pago: [

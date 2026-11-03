@@ -686,6 +686,7 @@ const ORIGEN_FLUJO: Record<string, string> = {
   egreso: "Pago",
   deposito_cheque: "Depósito cheque",
   rechazo_cheque: "Rechazo cheque",
+  cambio_cheque: "Cambio cheque",
   cobro_previsto: "Cobro previsto",
   cheque_cartera: "Cheque a cobrar",
   pago_previsto: "Pago previsto",

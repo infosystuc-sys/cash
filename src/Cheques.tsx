@@ -15,6 +15,8 @@ import {
   Info,
   Pencil,
   Trash2,
+  Banknote,
+  Undo2,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
@@ -32,6 +34,7 @@ import {
   Loading,
   Modal,
   MoneyInput,
+  Segmented,
   SubmitButton,
   inputCls,
   selectCls,
@@ -39,20 +42,21 @@ import {
 } from "./components/ui";
 
 type Cheque = Row<"v_cheques">;
-type Tab = "todos" | "en_cartera" | "endosado" | "depositado" | "rechazado";
+type Tab = "todos" | "en_cartera" | "endosado" | "depositado" | "cambiado" | "rechazado";
 
 const ESTADO_LABEL: Record<string, string> = {
   en_cartera: "En cartera",
   endosado: "Endosado",
   depositado: "Depositado",
   rechazado: "Rechazado",
+  cambiado: "Cambiado",
 };
 
 export default function Cheques() {
   const [tab, setTab] = useState<Tab>("en_cartera");
   const [proximos, setProximos] = useState(false);
   const [busqueda, setBusqueda] = useState("");
-  const [accion, setAccion] = useState<{ tipo: "endosar" | "depositar" | "rechazar" | "editar"; cheque: Cheque } | null>(null);
+  const [accion, setAccion] = useState<{ tipo: "endosar" | "depositar" | "rechazar" | "editar" | "cambiar"; cheque: Cheque } | null>(null);
   const [cargar, setCargar] = useState(false);
   const detalle = useDetalle();
   const colsCheque = (extra?: ColumnaDetalle<Cheque>): ColumnaDetalle<Cheque>[] => [
@@ -84,6 +88,18 @@ export default function Cheques() {
   }, [cheques, tab, proximos, busqueda]);
 
   const count = (e: Tab) => (e === "todos" ? cheques.length : cheques.filter((c) => c.estado === e).length);
+
+  async function deshacerCambio(c: Cheque) {
+    if (
+      !confirm(
+        `¿Deshacer el cambio del cheque #${c.numero}? Se borran los ingresos a las cuentas${c.cambio_interes ? ` y el gasto por interés de ${money(c.cambio_interes)}` : ""}, y el cheque vuelve a cartera.`,
+      )
+    )
+      return;
+    const { error } = await supabase.rpc("anular_cambio_cheque", { p_cheque_id: c.id! });
+    if (error) alert(error.message);
+    reload();
+  }
 
   async function eliminar(c: Cheque) {
     const aviso = c.cobro_id
@@ -124,6 +140,8 @@ export default function Cheques() {
                   Estado: ESTADO_LABEL[c.estado ?? ""],
                   "Endosado a": c.proveedor_endoso,
                   "Depositado en": c.cuenta_deposito,
+                  "Cambiado (fecha)": c.fecha_cambio ? fecha(c.fecha_cambio) : "",
+                  "Interés cambio": c.cambio_interes ?? "",
                 })),
               )
             }
@@ -221,6 +239,7 @@ export default function Cheques() {
           />
           <TabButton active={tab === "endosado"} onClick={() => setTab("endosado")} label="Endosados" count={count("endosado")} />
           <TabButton active={tab === "depositado"} onClick={() => setTab("depositado")} label="Depositados" count={count("depositado")} />
+          <TabButton active={tab === "cambiado"} onClick={() => setTab("cambiado")} label="Cambiados" count={count("cambiado")} />
           <TabButton active={tab === "rechazado"} onClick={() => setTab("rechazado")} label="Rechazados" count={count("rechazado")} />
         </div>
 
@@ -275,6 +294,8 @@ export default function Cheques() {
                     cheque={c}
                     onEndosar={() => setAccion({ tipo: "endosar", cheque: c })}
                     onDepositar={() => setAccion({ tipo: "depositar", cheque: c })}
+                    onCambiar={() => setAccion({ tipo: "cambiar", cheque: c })}
+                    onDeshacerCambio={() => deshacerCambio(c)}
                     onRechazar={() => setAccion({ tipo: "rechazar", cheque: c })}
                     onEditar={() => setAccion({ tipo: "editar", cheque: c })}
                     onEliminar={() => eliminar(c)}
@@ -293,6 +314,7 @@ export default function Cheques() {
       </div>
 
       {accion?.tipo === "endosar" && <EndosoModal cheque={accion.cheque} onClose={() => setAccion(null)} onSaved={() => (setAccion(null), reload())} />}
+      {accion?.tipo === "cambiar" && <CambioModal cheque={accion.cheque} onClose={() => setAccion(null)} onSaved={() => (setAccion(null), reload())} />}
       {accion?.tipo === "depositar" && <DepositoModal cheque={accion.cheque} onClose={() => setAccion(null)} onSaved={() => (setAccion(null), reload())} />}
       {accion?.tipo === "editar" && <EditarChequeModal cheque={accion.cheque} onClose={() => setAccion(null)} onSaved={() => (setAccion(null), reload())} />}
       {accion?.tipo === "rechazar" && <RechazoModal cheque={accion.cheque} onClose={() => setAccion(null)} onSaved={() => (setAccion(null), reload())} />}
@@ -387,6 +409,8 @@ function CheckRow({
   cheque: c,
   onEndosar,
   onDepositar,
+  onCambiar,
+  onDeshacerCambio,
   onRechazar,
   onEditar,
   onEliminar,
@@ -394,6 +418,8 @@ function CheckRow({
   cheque: Cheque;
   onEndosar: () => void;
   onDepositar: () => void;
+  onCambiar: () => void;
+  onDeshacerCambio: () => void;
   onRechazar: () => void;
   onEditar: () => void;
   onEliminar: () => void;
@@ -452,6 +478,8 @@ function CheckRow({
             {c.estado === "endosado" && `→ ${c.proveedor_endoso} (${fecha(c.fecha_endoso)})`}
             {c.estado === "depositado" && `→ ${c.cuenta_deposito} (${fecha(c.fecha_deposito)})`}
             {c.estado === "rechazado" && `${fecha(c.fecha_rechazo)} ${c.motivo_rechazo ?? ""}`}
+            {c.estado === "cambiado" &&
+              `→ ${c.cambio_detalle ?? ""} (${fecha(c.fecha_cambio)})${c.cambio_interes ? ` • interés ${money(c.cambio_interes)}` : ""}${c.cambio_proveedor ? ` • ${c.cambio_proveedor}` : ""}`}
           </span>
         )}
       </td>
@@ -496,7 +524,15 @@ function CheckRow({
               <button onClick={onDepositar} title="Depositar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-surface-container-high transition-colors">
                 <Landmark className="w-4 h-4" />
               </button>
+              <button onClick={onCambiar} title="Cambiar por efectivo / transferencia" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-surface-container-high transition-colors">
+                <Banknote className="w-4 h-4" />
+              </button>
             </>
+          )}
+          {c.estado === "cambiado" && (
+            <button onClick={onDeshacerCambio} title="Deshacer cambio" className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors">
+              <Undo2 className="w-4 h-4" />
+            </button>
           )}
           {(enCartera || c.estado === "depositado") && (
             <button onClick={onRechazar} title="Marcar rechazado" className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors">
@@ -1046,6 +1082,224 @@ function EditarChequeModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClo
         </p>
       )}
       <ErrorBanner message={error} />
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Cambio de cheque por efectivo y/o transferencia, con interés.        */
+/* importe del cheque = efectivo + transferencia + interés              */
+/* El interés se registra como egreso (gasto) en la categoría elegida.  */
+/* ------------------------------------------------------------------ */
+
+type FormaCambio = "efectivo" | "transferencia" | "ambos";
+
+const red2 = (n: number) => Math.round(n * 100) / 100;
+
+function CambioModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: () => void; onSaved: () => void }) {
+  const { data: cat, reload } = useData(async () => {
+    const [cuentas, categorias, proveedores] = await Promise.all([
+      supabase.from("cuentas").select("id, nombre, tipo").eq("activa", true).eq("moneda", "ARS").order("id"),
+      supabase.from("categorias_egreso").select("id, nombre").eq("activa", true).order("nombre"),
+      supabase.from("proveedores").select("id, razon_social").eq("activo", true).order("razon_social"),
+    ]);
+    return { cuentas: check(cuentas), categorias: check(categorias), proveedores: check(proveedores) };
+  });
+
+  const importe = cheque.importe ?? 0;
+  const [fechaC, setFechaC] = useState(hoyISO());
+  const [forma, setForma] = useState<FormaCambio>("transferencia");
+  const [interes, setInteres] = useState(NaN);
+  const [efectivoAmbos, setEfectivoAmbos] = useState(NaN);
+  const [cuentaEf, setCuentaEf] = useState("");
+  const [cuentaTr, setCuentaTr] = useState("");
+  const [categoriaId, setCategoriaId] = useState("");
+  const [proveedorId, setProveedorId] = useState("");
+  const [nuevoProv, setNuevoProv] = useState(false);
+  const { saving, error, setError, run } = useSubmit();
+
+  const cuentas = cat?.cuentas ?? [];
+  const cuentasEfectivo = cuentas.filter((c) => c.tipo === "efectivo");
+  const cuentasBanco = cuentas.filter((c) => c.tipo !== "efectivo");
+  // Propuestas: Caja para el efectivo, Galicia (o la primera cuenta bancaria) para la transferencia,
+  // y la categoría de intereses para el gasto
+  const cuentaEfectivo = cuentaEf || String(cuentasEfectivo[0]?.id ?? cuentas[0]?.id ?? "");
+  const cuentaTransf = cuentaTr || String((cuentasBanco.find((c) => c.nombre.trim().toLowerCase() === "galicia") ?? cuentasBanco[0] ?? cuentas[0])?.id ?? "");
+  const categoria =
+    categoriaId || String(cat?.categorias.find((c) => /inter[eé]s|financ/i.test(c.nombre))?.id ?? "");
+
+  const int = interes > 0 ? red2(interes) : 0;
+  const neto = red2(importe - int);
+  const efectivo = forma === "efectivo" ? neto : forma === "ambos" ? (efectivoAmbos > 0 ? red2(efectivoAmbos) : 0) : 0;
+  const transferencia = forma === "transferencia" ? neto : forma === "ambos" ? red2(neto - efectivo) : 0;
+  const tasa = importe > 0 ? (int / importe) * 100 : 0;
+
+  const guardar = () =>
+    run(async () => {
+      if (!(interes >= 0) && Number.isFinite(interes)) return setError("El interés no puede ser negativo");
+      if (int >= importe) return setError("El interés no puede ser igual o mayor al importe del cheque");
+      if (forma === "ambos" && !(efectivo > 0)) return setError("Indicá cuánto recibís en efectivo");
+      if (forma === "ambos" && !(transferencia > 0)) return setError("El efectivo no puede cubrir todo el neto: para eso elegí solo Efectivo");
+      if (efectivo > 0 && !cuentaEfectivo) return setError("Elegí la cuenta donde entra el efectivo");
+      if (transferencia > 0 && !cuentaTransf) return setError("Elegí la cuenta donde entra la transferencia");
+      if (int > 0 && !categoria) return setError("Elegí la categoría de gasto para el interés");
+      check(
+        await supabase.rpc("cambiar_cheque", {
+          p_cheque_id: cheque.id!,
+          p_fecha: fechaC,
+          p_efectivo: efectivo,
+          p_cuenta_efectivo_id: efectivo > 0 ? Number(cuentaEfectivo) : null,
+          p_transferencia: transferencia,
+          p_cuenta_transferencia_id: transferencia > 0 ? Number(cuentaTransf) : null,
+          p_interes: int,
+          p_categoria_egreso_id: int > 0 ? Number(categoria) : null,
+          p_proveedor_id: proveedorId ? Number(proveedorId) : undefined,
+        }),
+      );
+      onSaved();
+    });
+
+  const selectCuenta = (lista: typeof cuentas, valor: string, onChange: (v: string) => void) => (
+    <select className={selectCls} value={valor} onChange={(e) => onChange(e.target.value)}>
+      {lista.map((c) => (
+        <option key={c.id} value={c.id}>
+          {c.nombre}
+        </option>
+      ))}
+    </select>
+  );
+
+  return (
+    <Modal
+      title="Cambiar Cheque"
+      subtitle="Por efectivo, transferencia o ambos • el interés se registra como gasto"
+      icon={<Banknote className="w-6 h-6" />}
+      onClose={onClose}
+      footer={
+        <>
+          <CancelButton onClick={onClose} />
+          <SubmitButton onClick={guardar} saving={saving}>
+            <CheckCircle className="w-4 h-4" />
+            Confirmar Cambio
+          </SubmitButton>
+        </>
+      }
+    >
+      <ChequeResumen cheque={cheque} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <FormGroup label="Fecha del cambio *">
+          <input type="date" className={inputCls} value={fechaC} onChange={(e) => setFechaC(e.target.value)} />
+        </FormGroup>
+        <FormGroup label="Financiera / quien cambia (opcional)" onNuevo={() => setNuevoProv(true)}>
+          <select
+            className={selectCls}
+            value={proveedorId}
+            onChange={(e) => (e.target.value === "nuevo" ? setNuevoProv(true) : setProveedorId(e.target.value))}
+          >
+            <option value="">Sin especificar</option>
+            {cat?.proveedores.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.razon_social}
+              </option>
+            ))}
+            <option value="nuevo">+ Nuevo proveedor…</option>
+          </select>
+        </FormGroup>
+        <FormGroup label="Interés cobrado ($)">
+          <MoneyInput value={interes} onChange={setInteres} />
+          {int > 0 && <span className="text-[10px] font-bold text-secondary">{tasa.toLocaleString("es-AR", { maximumFractionDigits: 2 })}% del cheque</span>}
+        </FormGroup>
+        <FormGroup label="o tasa (%)">
+          <MoneyInput
+            prefix="%"
+            value={importe > 0 && Number.isFinite(interes) ? red2(tasa) : NaN}
+            onChange={(t) => setInteres(Number.isFinite(t) ? red2((importe * t) / 100) : NaN)}
+          />
+        </FormGroup>
+        <FormGroup label="Recibís en" className="sm:col-span-2">
+          <Segmented
+            value={forma}
+            onChange={setForma}
+            options={[
+              { value: "transferencia", label: "Transferencia" },
+              { value: "efectivo", label: "Efectivo" },
+              { value: "ambos", label: "Efectivo + transferencia" },
+            ]}
+          />
+        </FormGroup>
+        {forma !== "transferencia" && (
+          <>
+            <FormGroup label="Efectivo recibido (ARS)">
+              {forma === "ambos" ? (
+                <MoneyInput value={efectivoAmbos} onChange={setEfectivoAmbos} />
+              ) : (
+                <div className="h-10 px-3 rounded-lg bg-surface-container-low flex items-center justify-end text-xs font-bold font-numeric text-primary">{money(efectivo)}</div>
+              )}
+            </FormGroup>
+            <FormGroup label="Cuenta del efectivo *">{selectCuenta(cuentasEfectivo.length ? cuentasEfectivo : cuentas, cuentaEfectivo, setCuentaEf)}</FormGroup>
+          </>
+        )}
+        {forma !== "efectivo" && (
+          <>
+            <FormGroup label="Transferencia recibida (ARS)">
+              <div className="h-10 px-3 rounded-lg bg-surface-container-low flex items-center justify-end text-xs font-bold font-numeric text-primary">{money(transferencia)}</div>
+              {forma === "ambos" && <span className="text-[10px] text-on-surface-variant">Neto menos el efectivo</span>}
+            </FormGroup>
+            <FormGroup label="Cuenta de la transferencia *">{selectCuenta(cuentasBanco.length ? cuentasBanco : cuentas, cuentaTransf, setCuentaTr)}</FormGroup>
+          </>
+        )}
+        {int > 0 && (
+          <FormGroup label="Categoría de gasto del interés *" className="sm:col-span-2">
+            <select className={selectCls} value={categoria} onChange={(e) => setCategoriaId(e.target.value)}>
+              <option value="">Seleccionar…</option>
+              {cat?.categorias.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nombre}
+                </option>
+              ))}
+            </select>
+          </FormGroup>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+        {[
+          { t: "Cheque", v: importe },
+          { t: "Interés (gasto)", v: int, c: "text-error" },
+          { t: "Efectivo", v: efectivo },
+          { t: "Transferencia", v: transferencia },
+        ].map((x) => (
+          <div key={x.t} className="p-3 rounded-lg bg-surface-container-low">
+            <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{x.t}</div>
+            <div className={cn("font-numeric font-bold text-base", x.c)}>{money(x.v)}</div>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-3 p-4 rounded-xl bg-secondary-fixed/20 border border-secondary/10 text-[11px] text-on-surface-variant">
+        <Info className="w-4 h-4 text-secondary shrink-0" />
+        <p>
+          El cheque pasa a <strong>Cambiado</strong> y sale de la cartera. Lo recibido entra hoy a las cuentas elegidas
+          {int > 0 && (
+            <>
+              {" "}
+              y el interés de <strong>{money(int)}</strong> se registra como egreso
+            </>
+          )}
+          . En el cash flow deja de figurar en su fecha de pago.
+        </p>
+      </div>
+      <ErrorBanner message={error} />
+      {nuevoProv && (
+        <ProveedorModal
+          proveedor={null}
+          onClose={() => setNuevoProv(false)}
+          onSaved={(id) => {
+            setNuevoProv(false);
+            reload();
+            setProveedorId(String(id));
+          }}
+        />
+      )}
     </Modal>
   );
 }

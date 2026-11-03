@@ -57,6 +57,7 @@ const TIPOS_MOV: Record<string, string> = {
   transferencia_entrada: "Transf. recibida",
   deposito_cheque: "Depósito cheque",
   rechazo_cheque: "Rechazo cheque",
+  cambio_cheque: "Cambio cheque",
 };
 
 const MEDIOS: Record<string, string> = {
