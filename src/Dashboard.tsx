@@ -9,6 +9,7 @@ import { ErrorBanner, Loading, Segmented } from "./components/ui";
 import { useDetalle, tarjetaClickeable, type ColumnaDetalle } from "./components/Detalle";
 import { ReporteVentas } from "./components/ReporteVentas";
 import { ReporteEgresos } from "./components/ReporteEgresos";
+import { CashflowHorizontal } from "./components/CashflowHorizontal";
 
 type Periodo = "day" | "week" | "month";
 
@@ -619,6 +620,16 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      <CashflowHorizontal
+        periodo={periodo}
+        onPeriodo={setPeriodo}
+        opciones={(Object.keys(RANGOS) as Periodo[]).map((p) => ({ value: p, label: RANGOS[p].label }))}
+        filas={flujo.data}
+        etiqueta={(ini) => etiquetaPeriodo(periodo, ini)}
+        origenes={ORIGEN_FLUJO}
+        hoy={hoy}
+      />
 
       {data && <ReporteVentas tc={data.tc} />}
       <ReporteEgresos />
