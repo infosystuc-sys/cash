@@ -1533,6 +1533,7 @@ export type Database = {
         Args: {
           p_cuenta_id: number
           p_fecha: string
+          p_fecha_devolucion?: string
           p_importe: number
           p_ingreso_id: number
           p_medio: Database["public"]["Enums"]["medio_cobro"]
@@ -1545,6 +1546,7 @@ export type Database = {
           p_cheques: Json
           p_cliente_id: number
           p_fecha: string
+          p_fecha_devolucion?: string
           p_tc?: number
           p_vencimientos: number[]
         }

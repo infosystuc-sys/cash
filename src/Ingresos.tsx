@@ -1389,14 +1389,21 @@ function CobroModal({
   const totalCheques = Math.round(cheques.reduce((s, c) => s + (c.importe > 0 ? c.importe : 0), 0) * 100) / 100;
   const saldoVencArs = aArsVto(venc?.saldo ?? 0);
 
+  // Sobrepago: lo que supera el saldo del ingreso queda como deuda con el cliente (módulo Deudas)
+  const [fechaDevolucion, setFechaDevolucion] = useState(sumarDias(hoyISO(), 30));
+  const excedente = esCheque
+    ? Math.max(0, Math.round((totalCheques - aArsVto(saldoIngreso)) * 100) / 100)
+    : modo === "cuenta" && Number.isFinite(monto)
+      ? Math.max(0, Math.round((monto - saldoIngreso) * 100) / 100)
+      : 0;
+  const monedaExcedente: Moneda = esCheque ? "ARS" : moneda;
+
   const guardarCheques = async () => {
     if (!venc) return setError("No hay vencimientos pendientes");
     if (moneda === "USD" && !(tcCobro > 0)) return setError("Ingresá el tipo de cambio");
     const falta = validarCheques(cheques);
     if (falta) return setError(falta);
-    const saldoIngresoArs = aArsVto(saldoIngreso);
-    if (totalCheques > saldoIngresoArs + 0.01)
-      return setError(`Los cheques (${money(totalCheques)}) superan el saldo pendiente del ingreso (${money(saldoIngresoArs)})`);
+    if (excedente > 0 && !fechaDevolucion) return setError("Indicá la fecha prevista de devolución del excedente");
     // Solo los vencimientos que efectivamente alcanzan a cubrir los cheques
     const ids: number[] = [];
     let resto = totalCheques;
@@ -1412,6 +1419,7 @@ function CobroModal({
         p_cheques: chequesPayload(cheques),
         p_vencimientos: ids,
         p_tc: moneda === "USD" ? tcCobro : undefined,
+        p_fecha_devolucion: excedente > 0 ? fechaDevolucion : undefined,
       }),
     );
     onSaved();
@@ -1425,8 +1433,8 @@ function CobroModal({
       if (enPesos && modo !== "total" && !(tcCobro > 0)) return setError("Ingresá el tipo de cambio");
       if (!(monto > 0)) return setError("Ingresá el importe cobrado");
       if (modo === "parcial" && monto >= (venc.saldo ?? 0))
-        return setError(`Un cobro parcial debe ser menor al saldo del vencimiento (${money(venc.saldo, moneda)}). Para cancelarlo elegí "Total".`);
-      if (modo === "cuenta" && monto > saldoIngreso) return setError(`Supera el saldo pendiente del ingreso (${money(saldoIngreso, moneda)})`);
+        return setError(`Un cobro parcial debe ser menor al saldo del vencimiento (${money(venc.saldo, moneda)}). Para cancelarlo elegí "Total"; para cobrar de más, "A cuenta".`);
+      if (excedente > 0 && !fechaDevolucion) return setError("Indicá la fecha prevista de devolución del excedente");
       if (necesitaTc && !(tcFinal > 0)) return setError("Ingresá el tipo de cambio");
       if (enPesos && cuenta?.moneda !== "ARS") return setError("Un cobro en pesos se acredita en una cuenta en pesos");
       if (!cuenta) return setError("Elegí la cuenta destino");
@@ -1439,6 +1447,7 @@ function CobroModal({
             p_medio: medio,
             p_cuenta_id: cuenta!.id,
             p_tc: necesitaTc || moneda === "USD" ? tcFinal : undefined,
+            p_fecha_devolucion: excedente > 0 ? fechaDevolucion : undefined,
           }),
         );
         return onSaved();
@@ -1473,7 +1482,7 @@ function CobroModal({
         </>
       }
     >
-      {!esCheque && <ModoImputacionSelector value={modo} onChange={setModo} etiqueta="vencimiento" cuentaDeshabilitada={(vencs?.length ?? 0) < 2} />}
+      {!esCheque && <ModoImputacionSelector value={modo} onChange={setModo} etiqueta="vencimiento" />}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
         {(modo !== "cuenta" || esCheque) && (
           <FormGroup label={esCheque ? "Imputar desde el vencimiento *" : "Vencimiento *"} className="sm:col-span-2">
@@ -1514,7 +1523,7 @@ function CobroModal({
             {modo === "parcial" && venc && monto > 0 && monto < (venc.saldo ?? 0) && (
               <span className="text-[10px] font-bold text-secondary">Queda saldo en el vencimiento: {money((venc.saldo ?? 0) - monto, moneda)}</span>
             )}
-            {modo === "cuenta" && <span className="text-[10px] text-on-surface-variant">Máximo {money(saldoIngreso, moneda)}</span>}
+            {modo === "cuenta" && <span className="text-[10px] text-on-surface-variant">Saldo del ingreso {money(saldoIngreso, moneda)}; lo que exceda queda como deuda con el cliente</span>}
           </FormGroup>
         ) : (
         <FormGroup label={`Importe cobrado * (${moneda})`}>
@@ -1528,7 +1537,7 @@ function CobroModal({
           {modo === "parcial" && venc && monto > 0 && monto < (venc.saldo ?? 0) && (
             <span className="text-[10px] font-bold text-secondary">Queda saldo en el vencimiento: {money((venc.saldo ?? 0) - monto, moneda)}</span>
           )}
-          {modo === "cuenta" && <span className="text-[10px] text-on-surface-variant">Máximo {money(saldoIngreso, moneda)}</span>}
+          {modo === "cuenta" && <span className="text-[10px] text-on-surface-variant">Saldo del ingreso {money(saldoIngreso, moneda)}; lo que exceda queda como deuda con el cliente</span>}
         </FormGroup>
         )}
         <FormGroup label="Medio de cobro *">
@@ -1576,9 +1585,9 @@ function CobroModal({
               <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Saldo del vencimiento</div>
               <div className="font-numeric font-bold text-base">{money(saldoVencArs)}</div>
             </div>
-            <div className={cn("p-3 rounded-lg", totalCheques > aArsVto(saldoIngreso) + 0.01 ? "bg-error/10 text-error" : "bg-surface-container-low")}>
+            <div className={cn("p-3 rounded-lg", excedente > 0 ? "bg-tertiary/10 text-tertiary" : "bg-surface-container-low")}>
               <div className="text-[10px] font-bold uppercase tracking-widest">
-                {totalCheques > saldoVencArs + 0.01 ? (totalCheques > aArsVto(saldoIngreso) + 0.01 ? "Excede el saldo del ingreso" : "Pasa al próximo vencimiento") : "Queda pendiente"}
+                {totalCheques > saldoVencArs + 0.01 ? (excedente > 0 ? "Excede el vencimiento" : "Pasa al próximo vencimiento") : "Queda pendiente"}
               </div>
               <div className="font-numeric font-bold text-base">{money(Math.abs(saldoVencArs - totalCheques))}</div>
             </div>
@@ -1588,7 +1597,8 @@ function CobroModal({
           </p>
         </>
       )}
-      {modo === "cuenta" && !esCheque && <ImputacionPreview items={reparto} moneda={moneda} etiqueta="Venc." total={saldoIngreso - (monto > 0 ? monto : 0)} />}
+      {modo === "cuenta" && !esCheque && <ImputacionPreview items={reparto} moneda={moneda} etiqueta="Venc." total={Math.max(0, saldoIngreso - (monto > 0 ? monto : 0))} />}
+      {excedente > 0 && <ExcedenteAviso importe={excedente} moneda={monedaExcedente} cliente={ingreso.cliente ?? "el cliente"} fecha={fechaDevolucion} onFecha={setFechaDevolucion} />}
       <ErrorBanner message={error} />
     </Modal>
   );
@@ -1648,6 +1658,24 @@ const chequesPayload = (cheques: ChequeForm[]) =>
     librador: c.librador.trim(),
     librador_cuit: c.librador_cuit.trim(),
   }));
+
+/** Aviso de sobrepago: el excedente queda como deuda con el cliente a devolver en la fecha indicada. */
+function ExcedenteAviso({ importe, moneda, cliente, fecha: fechaDev, onFecha }: { importe: number; moneda: Moneda; cliente: string; fecha: string; onFecha: (f: string) => void }) {
+  return (
+    <div className="p-4 rounded-xl bg-tertiary/5 border border-tertiary/20 grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+      <div className="sm:col-span-2 text-xs space-y-1">
+        <div className="text-[10px] font-bold text-tertiary uppercase tracking-widest">Sobrepago</div>
+        <p>
+          El pago supera el saldo en <strong className="font-numeric">{money(importe, moneda)}</strong>. El excedente ingresa igual y queda registrado como
+          <strong> deuda con {cliente}</strong> en Deudas; el cash flow la muestra como pago previsto en la fecha de devolución.
+        </p>
+      </div>
+      <FormGroup label="Fecha de devolución *">
+        <input type="date" className={inputCls} value={fechaDev} onChange={(e) => onFecha(e.target.value)} />
+      </FormGroup>
+    </div>
+  );
+}
 
 /** Carga de uno o varios cheques (en pesos). objetivo: importe a cubrir, para proponer lo que falta. */
 function ChequesEditor({
@@ -1806,6 +1834,8 @@ function CobranzaChequesModal({
   const totalElegido = r2(seleccion.reduce((s, v) => s + aArs(v, v.saldo ?? 0), 0));
   const totalCheques = r2(cheques.reduce((s, c) => s + (c.importe > 0 ? c.importe : 0), 0));
   const diferencia = r2(totalElegido - totalCheques);
+  const excedente = seleccion.length > 0 && diferencia < -0.01 ? -diferencia : 0;
+  const [fechaDevolucion, setFechaDevolucion] = useState(sumarDias(hoyISO(), 30));
   const aplicado = imputarCheques(cheques, seleccion, tcUso);
 
   const alternar = (id: number) =>
@@ -1823,8 +1853,7 @@ function CobranzaChequesModal({
       if (hayUsd && !(tcCobro > 0)) return setError("Hay vencimientos en USD: ingresá el tipo de cambio");
       const falta = validarCheques(cheques);
       if (falta) return setError(falta);
-      if (totalCheques > totalElegido + 0.01)
-        return setError(`Los cheques (${money(totalCheques)}) superan el saldo de los vencimientos marcados (${money(totalElegido)}). Marcá más vencimientos o corregí los importes.`);
+      if (excedente > 0 && !fechaDevolucion) return setError("Indicá la fecha prevista de devolución del excedente");
       check(
         await supabase.rpc("registrar_cobranza_cheques", {
           p_cliente_id: cliente.id,
@@ -1832,6 +1861,7 @@ function CobranzaChequesModal({
           p_cheques: chequesPayload(cheques),
           p_vencimientos: seleccion.map((v) => v.id!),
           p_tc: hayUsd ? tcCobro : undefined,
+          p_fecha_devolucion: excedente > 0 ? fechaDevolucion : undefined,
         }),
       );
       onSaved();
@@ -1945,11 +1975,12 @@ function CobranzaChequesModal({
           <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Saldo marcado</div>
           <div className="font-numeric font-bold text-base">{money(totalElegido)}</div>
         </div>
-        <div className={cn("p-3 rounded-lg", diferencia < -0.01 ? "bg-error/10 text-error" : "bg-surface-container-low")}>
-          <div className="text-[10px] font-bold uppercase tracking-widest">{diferencia < -0.01 ? "Exceso de cheques" : "Queda pendiente"}</div>
+        <div className={cn("p-3 rounded-lg", diferencia < -0.01 ? "bg-tertiary/10 text-tertiary" : "bg-surface-container-low")}>
+          <div className="text-[10px] font-bold uppercase tracking-widest">{diferencia < -0.01 ? "Excedente" : "Queda pendiente"}</div>
           <div className="font-numeric font-bold text-base">{money(Math.abs(diferencia))}</div>
         </div>
       </div>
+      {excedente > 0 && <ExcedenteAviso importe={excedente} moneda="ARS" cliente={cliente?.razon_social ?? "el cliente"} fecha={fechaDevolucion} onFecha={setFechaDevolucion} />}
       <ErrorBanner message={error} />
     </Modal>
   );
