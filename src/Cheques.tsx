@@ -1109,8 +1109,9 @@ function CambioModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: ()
   const importe = cheque.importe ?? 0;
   const [fechaC, setFechaC] = useState(hoyISO());
   const [forma, setForma] = useState<FormaCambio>("transferencia");
-  const [interes, setInteres] = useState(NaN);
-  const [efectivoAmbos, setEfectivoAmbos] = useState(NaN);
+  // Se cargan los importes netos recibidos; el interés sale por diferencia con el importe del cheque
+  const [efectivoRec, setEfectivoRec] = useState(NaN);
+  const [transfRec, setTransfRec] = useState(NaN);
   const [cuentaEf, setCuentaEf] = useState("");
   const [cuentaTr, setCuentaTr] = useState("");
   const [categoriaId, setCategoriaId] = useState("");
@@ -1128,18 +1129,17 @@ function CambioModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: ()
   const categoria =
     categoriaId || String(cat?.categorias.find((c) => /inter[eé]s|financ/i.test(c.nombre))?.id ?? "");
 
-  const int = interes > 0 ? red2(interes) : 0;
-  const neto = red2(importe - int);
-  const efectivo = forma === "efectivo" ? neto : forma === "ambos" ? (efectivoAmbos > 0 ? red2(efectivoAmbos) : 0) : 0;
-  const transferencia = forma === "transferencia" ? neto : forma === "ambos" ? red2(neto - efectivo) : 0;
+  const efectivo = forma !== "transferencia" && efectivoRec > 0 ? red2(efectivoRec) : 0;
+  const transferencia = forma !== "efectivo" && transfRec > 0 ? red2(transfRec) : 0;
+  const recibido = red2(efectivo + transferencia);
+  const int = red2(importe - recibido);
   const tasa = importe > 0 ? (int / importe) * 100 : 0;
 
   const guardar = () =>
     run(async () => {
-      if (!(interes >= 0) && Number.isFinite(interes)) return setError("El interés no puede ser negativo");
-      if (int >= importe) return setError("El interés no puede ser igual o mayor al importe del cheque");
-      if (forma === "ambos" && !(efectivo > 0)) return setError("Indicá cuánto recibís en efectivo");
-      if (forma === "ambos" && !(transferencia > 0)) return setError("El efectivo no puede cubrir todo el neto: para eso elegí solo Efectivo");
+      if (forma !== "transferencia" && !(efectivo > 0)) return setError("Indicá el efectivo neto recibido");
+      if (forma !== "efectivo" && !(transferencia > 0)) return setError("Indicá la transferencia neta recibida");
+      if (int < 0) return setError(`Lo recibido (${money(recibido)}) supera el importe del cheque (${money(importe)})`);
       if (efectivo > 0 && !cuentaEfectivo) return setError("Elegí la cuenta donde entra el efectivo");
       if (transferencia > 0 && !cuentaTransf) return setError("Elegí la cuenta donde entra la transferencia");
       if (int > 0 && !categoria) return setError("Elegí la categoría de gasto para el interés");
@@ -1172,7 +1172,7 @@ function CambioModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: ()
   return (
     <Modal
       title="Cambiar Cheque"
-      subtitle="Por efectivo, transferencia o ambos • el interés se registra como gasto"
+      subtitle="Cargá lo neto recibido: el interés se calcula por diferencia y se registra como gasto"
       icon={<Banknote className="w-6 h-6" />}
       onClose={onClose}
       footer={
@@ -1205,17 +1205,6 @@ function CambioModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: ()
             <option value="nuevo">+ Nuevo proveedor…</option>
           </select>
         </FormGroup>
-        <FormGroup label="Interés cobrado ($)">
-          <MoneyInput value={interes} onChange={setInteres} />
-          {int > 0 && <span className="text-[10px] font-bold text-secondary">{tasa.toLocaleString("es-AR", { maximumFractionDigits: 2 })}% del cheque</span>}
-        </FormGroup>
-        <FormGroup label="o tasa (%)">
-          <MoneyInput
-            prefix="%"
-            value={importe > 0 && Number.isFinite(interes) ? red2(tasa) : NaN}
-            onChange={(t) => setInteres(Number.isFinite(t) ? red2((importe * t) / 100) : NaN)}
-          />
-        </FormGroup>
         <FormGroup label="Recibís en" className="sm:col-span-2">
           <Segmented
             value={forma}
@@ -1229,21 +1218,16 @@ function CambioModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: ()
         </FormGroup>
         {forma !== "transferencia" && (
           <>
-            <FormGroup label="Efectivo recibido (ARS)">
-              {forma === "ambos" ? (
-                <MoneyInput value={efectivoAmbos} onChange={setEfectivoAmbos} />
-              ) : (
-                <div className="h-10 px-3 rounded-lg bg-surface-container-low flex items-center justify-end text-xs font-bold font-numeric text-primary">{money(efectivo)}</div>
-              )}
+            <FormGroup label="Efectivo neto recibido (ARS) *">
+              <MoneyInput value={efectivoRec} onChange={setEfectivoRec} />
             </FormGroup>
             <FormGroup label="Cuenta del efectivo *">{selectCuenta(cuentasEfectivo.length ? cuentasEfectivo : cuentas, cuentaEfectivo, setCuentaEf)}</FormGroup>
           </>
         )}
         {forma !== "efectivo" && (
           <>
-            <FormGroup label="Transferencia recibida (ARS)">
-              <div className="h-10 px-3 rounded-lg bg-surface-container-low flex items-center justify-end text-xs font-bold font-numeric text-primary">{money(transferencia)}</div>
-              {forma === "ambos" && <span className="text-[10px] text-on-surface-variant">Neto menos el efectivo</span>}
+            <FormGroup label="Transferencia neta recibida (ARS) *">
+              <MoneyInput value={transfRec} onChange={setTransfRec} />
             </FormGroup>
             <FormGroup label="Cuenta de la transferencia *">{selectCuenta(cuentasBanco.length ? cuentasBanco : cuentas, cuentaTransf, setCuentaTr)}</FormGroup>
           </>
@@ -1265,16 +1249,23 @@ function CambioModal({ cheque, onClose, onSaved }: { cheque: Cheque; onClose: ()
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
         {[
           { t: "Cheque", v: importe },
-          { t: "Interés (gasto)", v: int, c: "text-error" },
           { t: "Efectivo", v: efectivo },
           { t: "Transferencia", v: transferencia },
+          {
+            t: "Interés (gasto)",
+            v: int,
+            c: "text-error",
+            sub: int > 0 ? `${tasa.toLocaleString("es-AR", { maximumFractionDigits: 2 })}% del cheque • por diferencia` : "Por diferencia",
+          },
         ].map((x) => (
           <div key={x.t} className="p-3 rounded-lg bg-surface-container-low">
             <div className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{x.t}</div>
             <div className={cn("font-numeric font-bold text-base", x.c)}>{money(x.v)}</div>
+            {x.sub && <div className="text-[10px] font-bold text-on-surface-variant">{x.sub}</div>}
           </div>
         ))}
       </div>
+      {int < 0 && <p className="text-[11px] font-bold text-error">Lo recibido supera el importe del cheque en {money(-int)}.</p>}
       <div className="flex gap-3 p-4 rounded-xl bg-secondary-fixed/20 border border-secondary/10 text-[11px] text-on-surface-variant">
         <Info className="w-4 h-4 text-secondary shrink-0" />
         <p>

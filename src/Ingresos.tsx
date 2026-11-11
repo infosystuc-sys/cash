@@ -18,6 +18,7 @@ import {
   CalendarRange,
   Banknote,
   X,
+  CalendarSync,
 } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check, type Row } from "./lib/supabase";
@@ -78,6 +79,7 @@ export default function Ingresos() {
   const detalle = useDetalle();
   const [cobrar, setCobrar] = useState<{ ingreso: Ingreso; vencimiento?: Vencimiento } | null>(null);
   const [cobranzaCheques, setCobranzaCheques] = useState(false);
+  const [honorarios, setHonorarios] = useState(false);
   const [expandido, setExpandido] = useState<number | null>(null);
 
   const [busqueda, setBusqueda] = useState("");
@@ -285,6 +287,13 @@ export default function Ingresos() {
           >
             <FileText className="w-4 h-4 text-outline" />
             Listado PDF
+          </button>
+          <button
+            onClick={() => setHonorarios(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-surface-container-lowest text-on-surface text-xs font-bold rounded-lg border border-outline-variant/30 shadow-sm hover:bg-surface-container-low transition-colors"
+          >
+            <CalendarSync className="w-4 h-4 text-secondary" />
+            Honorarios mensuales
           </button>
           <button
             onClick={() => setCobranzaCheques(true)}
@@ -579,6 +588,17 @@ export default function Ingresos() {
         />
       )}
       {detalle.modal}
+      {honorarios && catalogos.data && (
+        <HonorariosModal
+          catalogos={catalogos.data}
+          clienteInicial={clienteId}
+          onClose={() => setHonorarios(false)}
+          onSaved={() => {
+            setHonorarios(false);
+            reload();
+          }}
+        />
+      )}
       {cobranzaCheques && catalogos.data && (
         <CobranzaChequesModal
           clientes={catalogos.data.clientes}
@@ -1981,6 +2001,284 @@ function CobranzaChequesModal({
         </div>
       </div>
       {excedente > 0 && <ExcedenteAviso importe={excedente} moneda="ARS" cliente={cliente?.razon_social ?? "el cliente"} fecha={fechaDevolucion} onFecha={setFechaDevolucion} />}
+      <ErrorBanner message={error} />
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Honorarios mensuales: se cargan una vez y generan un ingreso por mes */
+/* (por defecto, los próximos 6). Cada ingreso se factura en su mes:    */
+/* la fecha de factura es la del vencimiento de ese mes, no la de carga.*/
+/* ------------------------------------------------------------------ */
+
+const mesTexto = (mes: string) => `${mes.slice(5, 7)}/${mes.slice(0, 4)}`;
+
+/** Vencimiento del mes "YYYY-MM" en el día indicado (o el último día si el mes es más corto). */
+function vencimientoDelMes(mes: string, dia: number) {
+  const ultimo = Number(sumarDias(sumarMeses(`${mes}-01`, 1), -1).slice(8, 10));
+  return `${mes}-${String(Math.min(Math.max(dia, 1), ultimo)).padStart(2, "0")}`;
+}
+
+function HonorariosModal({
+  catalogos,
+  clienteInicial,
+  onClose,
+  onSaved,
+}: {
+  catalogos: Catalogos;
+  clienteInicial?: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const hoy = hoyISO();
+  const cliente0 = catalogos.clientes.find((c) => String(c.id) === clienteInicial) ?? catalogos.clientes[0];
+  const [clienteId, setClienteId] = useState(String(cliente0?.id ?? ""));
+  const [tipoId, setTipoId] = useState(String(cliente0?.tipo_ingreso_id ?? catalogos.tipos[0]?.id ?? ""));
+  const [concepto, setConcepto] = useState("Honorarios");
+  const [moneda, setMoneda] = useState<Moneda>("ARS");
+  const [importe, setImporte] = useState(NaN);
+  const [dia, setDia] = useState(10);
+  const [desde, setDesde] = useState(hoy.slice(0, 7));
+  const [meses, setMeses] = useState(6);
+  const [destino, setDestino] = useState("Transferencia");
+  const [excluidos, setExcluidos] = useState<Set<string>>(new Set());
+  const [creados, setCreados] = useState(0);
+  const { saving, error, setError, run } = useSubmit();
+
+  const cantidad = Math.min(Math.max(Math.floor(meses) || 0, 0), 24);
+  const plan = useMemo(
+    () =>
+      desde
+        ? Array.from({ length: cantidad }, (_, k) => {
+            const mes = sumarMeses(`${desde}-01`, k).slice(0, 7);
+            return { mes, vencimiento: vencimientoDelMes(mes, dia), descripcion: `${concepto.trim() || "Honorarios"} ${mesTexto(mes)}` };
+          })
+        : [],
+    [desde, cantidad, dia, concepto],
+  );
+
+  // Honorarios ya cargados para el cliente en esos meses (misma descripción): se marcan y no se vuelven a crear
+  const primerMes = plan[0]?.mes;
+  const ultimoMes = plan[plan.length - 1]?.mes;
+  const { data: existentes } = useData(async () => {
+    if (!clienteId || !primerMes || !ultimoMes) return [] as string[];
+    const filas = check(
+      await supabase
+        .from("ingresos")
+        .select("descripcion")
+        .eq("cliente_id", Number(clienteId))
+        .gte("fecha_factura", `${primerMes}-01`)
+        .lte("fecha_factura", sumarDias(sumarMeses(`${ultimoMes}-01`, 1), -1)),
+    );
+    return filas.map((f) => f.descripcion.trim().toLowerCase());
+  }, [clienteId, primerMes, ultimoMes]);
+  const yaCargado = (p: { descripcion: string }) => (existentes ?? []).includes(p.descripcion.toLowerCase());
+
+  const aCrear = plan.filter((p) => !yaCargado(p) && !excluidos.has(p.mes));
+  const total = aCrear.length * (Number.isFinite(importe) ? importe : 0);
+
+  const guardar = () =>
+    run(async () => {
+      if (!clienteId || !tipoId) return setError("Elegí cliente y tipo de ingreso");
+      if (!(importe > 0)) return setError("Ingresá el importe mensual");
+      if (!(dia >= 1 && dia <= 31)) return setError("El día de vencimiento debe estar entre 1 y 31");
+      if (!desde || cantidad < 1) return setError("Indicá el primer mes y la cantidad de meses");
+      if (aCrear.length === 0) return setError("No hay meses para cargar");
+      const cuentaId = destino.startsWith("c") ? Number(destino.slice(1)) : null;
+      let n = 0;
+      try {
+        for (const p of aCrear) {
+          check(
+            await supabase.rpc("crear_ingreso", {
+              p_cliente_id: Number(clienteId),
+              p_tipo_ingreso_id: Number(tipoId),
+              // Se factura en el mes del honorario: la fecha de factura es la de su vencimiento
+              p_fecha_factura: p.vencimiento,
+              p_descripcion: p.descripcion,
+              p_moneda: moneda,
+              p_importe_total: importe,
+              p_vencimientos: [
+                {
+                  id: null,
+                  fecha_vencimiento: p.vencimiento,
+                  importe,
+                  medio_previsto: cuentaId ? "Transferencia" : destino,
+                  cuenta_prevista_id: cuentaId,
+                },
+              ],
+            }),
+          );
+          n++;
+          setCreados(n);
+        }
+      } catch (e) {
+        throw new Error(
+          n > 0
+            ? `Se cargaron ${n} de ${aCrear.length} meses y falló el siguiente: ${(e as Error).message}. Volvé a confirmar para cargar los que faltan.`
+            : (e as Error).message,
+        );
+      }
+      onSaved();
+    });
+
+  const prefijo = moneda === "USD" ? "U$S" : "$";
+
+  return (
+    <Modal
+      title="Honorarios mensuales"
+      subtitle="Se cargan una vez y generan un ingreso por mes, facturado en el mes de cada honorario"
+      icon={<CalendarSync className="w-6 h-6" />}
+      onClose={onClose}
+      size="max-w-3xl"
+      footer={
+        <>
+          <CancelButton onClick={onClose} />
+          <SubmitButton onClick={guardar} saving={saving}>
+            <CheckCircle className="w-4 h-4" />
+            {saving && creados > 0 ? `Cargando ${creados}/${aCrear.length}…` : `Cargar ${aCrear.length} ${aCrear.length === 1 ? "mes" : "meses"}`}
+          </SubmitButton>
+        </>
+      }
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <FormGroup label="Cliente *">
+          <select
+            className={selectCls}
+            value={clienteId}
+            onChange={(e) => {
+              setClienteId(e.target.value);
+              setExcluidos(new Set());
+              const c = catalogos.clientes.find((x) => String(x.id) === e.target.value);
+              if (c?.tipo_ingreso_id) setTipoId(String(c.tipo_ingreso_id));
+            }}
+          >
+            {!clienteId && <option value="">Seleccionar…</option>}
+            {catalogos.clientes.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.razon_social}
+                {c.cuit && ` (CUIT ${c.cuit})`}
+              </option>
+            ))}
+          </select>
+        </FormGroup>
+        <FormGroup label="Tipo de Ingreso *">
+          <select className={selectCls} value={tipoId} onChange={(e) => setTipoId(e.target.value)}>
+            {!tipoId && <option value="">Seleccionar…</option>}
+            {catalogos.tipos.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.nombre}
+              </option>
+            ))}
+          </select>
+        </FormGroup>
+        <FormGroup label="Concepto *">
+          <input className={inputCls} value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Honorarios" />
+          <span className="text-[10px] text-on-surface-variant">Se le agrega el mes: "{concepto.trim() || "Honorarios"} MM/AAAA".</span>
+        </FormGroup>
+        <FormGroup label="Moneda">
+          <Segmented
+            value={moneda}
+            onChange={setMoneda}
+            options={[
+              { value: "ARS" as Moneda, label: "Pesos" },
+              { value: "USD" as Moneda, label: "Dólares" },
+            ]}
+          />
+        </FormGroup>
+        <FormGroup label={`Importe mensual * (${moneda})`}>
+          <MoneyInput value={importe} onChange={setImporte} prefix={prefijo} />
+        </FormGroup>
+        <FormGroup label="Día de vencimiento *">
+          <input type="number" min={1} max={31} className={inputCls} value={dia} onChange={(e) => setDia(Number(e.target.value))} />
+          <span className="text-[10px] text-on-surface-variant">En meses más cortos, el último día del mes.</span>
+        </FormGroup>
+        <FormGroup label="Primer mes *">
+          <input
+            type="month"
+            className={inputCls}
+            value={desde}
+            onChange={(e) => {
+              setDesde(e.target.value);
+              setExcluidos(new Set());
+            }}
+          />
+        </FormGroup>
+        <FormGroup label="Cantidad de meses *">
+          <input type="number" min={1} max={24} className={inputCls} value={meses} onChange={(e) => setMeses(Number(e.target.value))} />
+        </FormGroup>
+        <FormGroup label="Cobro previsto" className="sm:col-span-2">
+          <select className={selectCls} value={destino} onChange={(e) => setDestino(e.target.value)}>
+            {catalogos.cuentas.map((c) => (
+              <option key={c.id} value={`c${c.id}`}>
+                Transferencia {c.nombre}
+              </option>
+            ))}
+            <option value="Transferencia">Transferencia (sin cuenta)</option>
+            <option value="eCheq">Cheque / eCheq</option>
+            <option value="Efectivo">Efectivo</option>
+          </select>
+        </FormGroup>
+      </div>
+
+      {plan.length > 0 && (
+        <div className="rounded-xl border border-outline-variant/20 overflow-hidden">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="bg-surface-container-low/50 text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">
+                <th className="py-2 px-3 w-8"></th>
+                <th className="py-2 px-3">Mes</th>
+                <th className="py-2 px-3">Concepto</th>
+                <th className="py-2 px-3">Factura y vencimiento</th>
+                <th className="py-2 px-3 text-right">Importe</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-outline-variant/10">
+              {plan.map((p) => {
+                const cargado = yaCargado(p);
+                const incluido = !cargado && !excluidos.has(p.mes);
+                return (
+                  <tr key={p.mes} className={cn(!incluido && "opacity-50")}>
+                    <td className="py-2 px-3">
+                      <input
+                        type="checkbox"
+                        className="accent-secondary"
+                        disabled={cargado}
+                        checked={incluido}
+                        onChange={() =>
+                          setExcluidos((s) => {
+                            const n = new Set(s);
+                            if (n.has(p.mes)) n.delete(p.mes);
+                            else n.add(p.mes);
+                            return n;
+                          })
+                        }
+                      />
+                    </td>
+                    <td className="py-2 px-3 font-bold text-primary font-numeric">{mesTexto(p.mes)}</td>
+                    <td className="py-2 px-3">
+                      {p.descripcion}
+                      {cargado && <span className="ml-2 text-[9px] font-bold uppercase text-on-tertiary-container">Ya cargado</span>}
+                    </td>
+                    <td className="py-2 px-3 font-numeric">{fecha(p.vencimiento)}</td>
+                    <td className="py-2 px-3 text-right font-bold font-numeric">{Number.isFinite(importe) ? money(importe, moneda) : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="flex justify-between px-3 py-2 bg-surface-container-low/50 text-xs font-bold">
+            <span className="text-on-surface-variant">
+              {aCrear.length} {aCrear.length === 1 ? "ingreso" : "ingresos"} a cargar
+            </span>
+            <span className="font-numeric text-primary">{money(total, moneda)}</span>
+          </div>
+        </div>
+      )}
+      <p className="text-[11px] text-on-surface-variant">
+        Cada mes queda como un ingreso propio, con fecha de factura igual a su vencimiento: cuenta en las ventas del mes del honorario y
+        el cash flow lo proyecta como cobro en esa fecha. Después se cobra, edita o elimina como cualquier ingreso.
+      </p>
       <ErrorBanner message={error} />
     </Modal>
   );

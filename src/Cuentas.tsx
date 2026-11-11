@@ -73,6 +73,9 @@ const MEDIOS: Record<string, string> = {
 export default function Cuentas() {
   const [transferir, setTransferir] = useState(false);
   const [editandoTransf, setEditandoTransf] = useState<Transferencia | null>(null);
+  const [verTodasTransf, setVerTodasTransf] = useState(false);
+  // Se incrementa al guardar o eliminar una transferencia, para que el detalle de la cuenta recargue sus movimientos
+  const [rev, setRev] = useState(0);
   const detalle = useDetalle();
 
   type FilaSaldo = { tipo: string; nombre: string; detalle: string; importe: number };
@@ -112,7 +115,12 @@ export default function Cuentas() {
     const [cuentas, cheques, transferencias, cuotas, egresos3m, tc] = await Promise.all([
       supabase.from("v_cuentas_saldo").select("*").eq("activa", true).order("id"),
       supabase.from("v_cheques").select("importe, dias_para_pago, numero, banco_emisor, fecha_pago, cliente, librador").eq("estado", "en_cartera").order("fecha_pago"),
-      supabase.from("v_transferencias").select("*").order("fecha", { ascending: false }).order("id", { ascending: false }).limit(10),
+      supabase
+        .from("v_transferencias")
+        .select("*")
+        .order("fecha", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(verTodasTransf ? 1000 : 10),
       supabase
         .from("v_deuda_cuotas")
         .select("saldo, moneda, numero, fecha_vencimiento, estado, deudas(concepto, proveedores(razon_social))")
@@ -130,7 +138,44 @@ export default function Cuentas() {
       egresos3m: check(egresos3m),
       tc: tc.data?.venta ?? null,
     };
-  });
+  }, [verTodasTransf]);
+
+  const recargar = () => {
+    reload();
+    setRev((r) => r + 1);
+  };
+
+  const buscarTransf = async (id: number) => check(await supabase.from("v_transferencias").select("*").eq("id", id).single());
+
+  async function editarTransf(id: number) {
+    try {
+      setEditandoTransf(await buscarTransf(id));
+    } catch (e) {
+      alert((e as Error).message);
+    }
+  }
+
+  async function eliminarTransf(t: Transferencia | number) {
+    try {
+      const tr = typeof t === "number" ? await buscarTransf(t) : t;
+      const importe =
+        money(tr.importe_origen, tr.moneda_origen as Moneda) +
+        (tr.moneda_origen !== tr.moneda_destino ? ` → ${money(tr.importe_destino, tr.moneda_destino as Moneda)}` : "");
+      if (
+        !confirm(
+          `¿Eliminar la transferencia del ${fecha(tr.fecha)} de ${tr.cuenta_origen} a ${tr.cuenta_destino} por ${importe}?\n\n` +
+            "Los saldos de ambas cuentas se recalculan. Esta acción no se puede deshacer.",
+        )
+      )
+        return false;
+      check(await supabase.from("transferencias").delete().eq("id", tr.id!));
+      recargar();
+      return true;
+    } catch (e) {
+      alert((e as Error).message);
+      return false;
+    }
+  }
 
   const resumen = useMemo(() => {
     if (!data) return null;
@@ -146,6 +191,35 @@ export default function Cuentas() {
     return { bancos, usd, efectivo, cartera, total, egresoMensual, compromisos, chequesProximos };
   }, [data]);
 
+  const modalesTransf = (
+    <>
+      {editandoTransf && data && (
+        <TransferenciaModal
+          cuentas={data.cuentas}
+          transferencia={editandoTransf}
+          onClose={() => setEditandoTransf(null)}
+          onSaved={() => {
+            setEditandoTransf(null);
+            recargar();
+          }}
+          onEliminar={async () => {
+            if (await eliminarTransf(editandoTransf)) setEditandoTransf(null);
+          }}
+        />
+      )}
+      {transferir && data && (
+        <TransferenciaModal
+          cuentas={data.cuentas}
+          onClose={() => setTransferir(false)}
+          onSaved={() => {
+            setTransferir(false);
+            recargar();
+          }}
+        />
+      )}
+    </>
+  );
+
   if (seleccionada && data) {
     const cuenta = data.cuentas.find((c) => c.id === seleccionada);
     if (cuenta) {
@@ -155,17 +229,23 @@ export default function Cuentas() {
           tc={data.tc}
           onBack={() => setSeleccionada(null)}
           onEdit={() => setEditando(cuenta)}
+          rev={rev}
+          onEditarTransf={editarTransf}
+          onEliminarTransf={(id) => eliminarTransf(id)}
           modal={
-            editando && (
-              <CuentaModal
-                cuenta={editando === "nueva" ? null : editando}
-                onClose={() => setEditando(null)}
-                onSaved={() => {
-                  setEditando(null);
-                  reload();
-                }}
-              />
-            )
+            <>
+              {editando && (
+                <CuentaModal
+                  cuenta={editando === "nueva" ? null : editando}
+                  onClose={() => setEditando(null)}
+                  onSaved={() => {
+                    setEditando(null);
+                    reload();
+                  }}
+                />
+              )}
+              {modalesTransf}
+            </>
           }
         />
       );
@@ -378,10 +458,17 @@ export default function Cuentas() {
           <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-2xl p-8 shadow-sm space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-bold text-primary font-display">Últimas transferencias internas registradas</h2>
-                <p className="text-xs text-on-surface-variant">Trazabilidad de arbitrajes y reposiciones.</p>
+                <h2 className="text-lg font-bold text-primary font-display">
+                  {verTodasTransf ? "Transferencias internas registradas" : "Últimas transferencias internas registradas"}
+                </h2>
+                <p className="text-xs text-on-surface-variant">Trazabilidad de arbitrajes y reposiciones. Con el lápiz se modifican y con el tacho se eliminan.</p>
               </div>
-              <span className="text-[9px] font-bold text-outline uppercase bg-surface-container-low px-3 py-1 rounded border border-outline-variant/10">Sin impacto en P&L</span>
+              <div className="flex items-center gap-3">
+                <button onClick={() => setVerTodasTransf((v) => !v)} className="text-xs font-bold text-secondary hover:underline">
+                  {verTodasTransf ? "Ver solo las últimas 10" : "Ver todas"}
+                </button>
+                <span className="text-[9px] font-bold text-outline uppercase bg-surface-container-low px-3 py-1 rounded border border-outline-variant/10">Sin impacto en P&L</span>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -420,9 +507,12 @@ export default function Cuentas() {
                           <div className="text-[10px] text-on-surface-variant">→ {money(t.importe_destino, t.moneda_destino as Moneda)}</div>
                         )}
                       </td>
-                      <td className="py-4 px-4 text-right">
-                        <button onClick={() => setEditandoTransf(t)} title="Editar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors">
+                      <td className="py-4 px-4 text-right whitespace-nowrap">
+                        <button onClick={() => setEditandoTransf(t)} title="Modificar" className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors">
                           <Pencil className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => eliminarTransf(t)} title="Eliminar" className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors">
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </td>
                     </tr>
@@ -434,27 +524,7 @@ export default function Cuentas() {
         </>
       )}
 
-      {editandoTransf && data && (
-        <TransferenciaModal
-          cuentas={data.cuentas}
-          transferencia={editandoTransf}
-          onClose={() => setEditandoTransf(null)}
-          onSaved={() => {
-            setEditandoTransf(null);
-            reload();
-          }}
-        />
-      )}
-      {transferir && data && (
-        <TransferenciaModal
-          cuentas={data.cuentas}
-          onClose={() => setTransferir(false)}
-          onSaved={() => {
-            setTransferir(false);
-            reload();
-          }}
-        />
-      )}
+      {modalesTransf}
       {editando && (
         <CuentaModal
           cuenta={editando === "nueva" ? null : editando}
@@ -485,12 +555,18 @@ function AccountDetail({
   onBack,
   onEdit,
   modal,
+  rev,
+  onEditarTransf,
+  onEliminarTransf,
 }: {
   cuenta: Cuenta;
   tc: number | null;
   onBack: () => void;
   onEdit: () => void;
   modal: React.ReactNode;
+  rev: number;
+  onEditarTransf: (id: number) => void;
+  onEliminarTransf: (id: number) => void;
 }) {
   const [filtro, setFiltro] = useState<"todos" | "ingresos" | "egresos">("todos");
   const [desde, setDesde] = useState("");
@@ -518,7 +594,7 @@ function AccountDetail({
     (cobros ? check(cobros) : []).forEach((c) => medios.set(`cobros-${c.id}`, c.medio));
     (egresos ? check(egresos) : []).forEach((e) => medios.set(`egresos-${e.id}`, e.medio));
     return movs.map((m) => ({ ...m, medio: medios.get(`${m.origen}-${m.origen_id}`) ?? null }));
-  }, [cuenta.id, cuenta.saldo]);
+  }, [cuenta.id, cuenta.saldo, rev]);
 
   // Saldo corrido sobre todos los movimientos (ascendente); los filtros solo ocultan filas y se muestra del más reciente al más viejo
   const conSaldo = useMemo(() => {
@@ -694,10 +770,11 @@ function AccountDetail({
                   <th className="py-3 px-4 text-right">Ingreso (+)</th>
                   <th className="py-3 px-4 text-right">Egreso (-)</th>
                   <th className="py-3 px-4 text-right">Saldo</th>
+                  <th className="py-3 px-4"></th>
                 </tr>
               </thead>
               <tbody className="text-xs divide-y divide-outline-variant/10">
-                {movimientos.length === 0 && <EmptyRow colSpan={7} label={hayFiltros ? "Ningún movimiento coincide con los filtros" : "Sin movimientos"} />}
+                {movimientos.length === 0 && <EmptyRow colSpan={8} label={hayFiltros ? "Ningún movimiento coincide con los filtros" : "Sin movimientos"} />}
                 {movimientos.map((m) => (
                   <tr key={`${m.origen}-${m.origen_id}-${m.tipo}`} className="hover:bg-surface-container-low/50 transition-colors group">
                     <td className="py-4 px-4 font-numeric text-outline font-medium whitespace-nowrap">{fecha(m.fecha)}</td>
@@ -718,6 +795,26 @@ function AccountDetail({
                     </td>
                     <td className="py-4 px-4 text-right font-bold font-numeric text-error">{(m.importe ?? 0) < 0 ? money(m.importe, moneda) : "—"}</td>
                     <td className="py-4 px-4 text-right font-bold font-numeric text-primary">{money(m.saldo, moneda)}</td>
+                    <td className="py-4 px-4 text-right whitespace-nowrap">
+                      {m.origen === "transferencias" && m.origen_id != null && (
+                        <>
+                          <button
+                            onClick={() => onEditarTransf(m.origen_id!)}
+                            title="Modificar transferencia"
+                            className="p-1.5 rounded-lg text-outline hover:text-secondary hover:bg-secondary/5 transition-colors"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => onEliminarTransf(m.origen_id!)}
+                            title="Eliminar transferencia"
+                            className="p-1.5 rounded-lg text-outline hover:text-error hover:bg-error/5 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -818,11 +915,13 @@ function TransferenciaModal({
   transferencia,
   onClose,
   onSaved,
+  onEliminar,
 }: {
   cuentas: Cuenta[];
   transferencia?: Transferencia;
   onClose: () => void;
   onSaved: () => void;
+  onEliminar?: () => void;
 }) {
   const t = transferencia;
   const [origenId, setOrigenId] = useState(String(t?.cuenta_origen_id ?? cuentas[0]?.id ?? ""));
@@ -881,6 +980,12 @@ function TransferenciaModal({
       size="max-w-xl"
       footer={
         <>
+          {t && onEliminar && (
+            <button onClick={onEliminar} className="mr-auto flex items-center gap-1 text-xs font-bold text-error hover:underline">
+              <Trash2 className="w-3.5 h-3.5" />
+              Eliminar transferencia
+            </button>
+          )}
           <CancelButton onClick={onClose} />
           <SubmitButton onClick={guardar} saving={saving}>
             <CheckCircle className="w-4 h-4" />
