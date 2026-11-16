@@ -572,6 +572,7 @@ function AccountDetail({
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
   const [busqueda, setBusqueda] = useState("");
+  const [categoriaF, setCategoriaF] = useState("");
   const moneda = cuenta.moneda as Moneda;
 
   const { data, loading, error } = useData(async () => {
@@ -584,16 +585,28 @@ function AccountDetail({
         .order("fecha")
         .order("created_at"),
     );
-    // El medio no está en la vista: se completa desde cobros y egresos
+    // El medio y la categoría no están en la vista: se completan desde cobros y egresos
     const ids = (origen: string) => movs.filter((m) => m.origen === origen).map((m) => m.origen_id!);
     const [cobros, egresos] = await Promise.all([
       ids("cobros").length ? supabase.from("cobros").select("id, medio").in("id", ids("cobros")) : null,
-      ids("egresos").length ? supabase.from("egresos").select("id, medio").in("id", ids("egresos")) : null,
+      ids("egresos").length ? supabase.from("v_egresos").select("id, medio, categoria, categoria_color").in("id", ids("egresos")) : null,
     ]);
     const medios = new Map<string, string>();
+    const categorias = new Map<number, { nombre: string; color: string | null }>();
     (cobros ? check(cobros) : []).forEach((c) => medios.set(`cobros-${c.id}`, c.medio));
-    (egresos ? check(egresos) : []).forEach((e) => medios.set(`egresos-${e.id}`, e.medio));
-    return movs.map((m) => ({ ...m, medio: medios.get(`${m.origen}-${m.origen_id}`) ?? null }));
+    (egresos ? check(egresos) : []).forEach((e) => {
+      if (e.medio) medios.set(`egresos-${e.id}`, e.medio);
+      if (e.categoria) categorias.set(e.id!, { nombre: e.categoria, color: e.categoria_color });
+    });
+    return movs.map((m) => {
+      const cat = m.origen === "egresos" ? categorias.get(m.origen_id!) : undefined;
+      return {
+        ...m,
+        medio: medios.get(`${m.origen}-${m.origen_id}`) ?? null,
+        categoria: cat?.nombre ?? null,
+        categoria_color: cat?.color ?? null,
+      };
+    });
   }, [cuenta.id, cuenta.saldo, rev]);
 
   // Saldo corrido sobre todos los movimientos (ascendente); los filtros solo ocultan filas y se muestra del más reciente al más viejo
@@ -612,14 +625,16 @@ function AccountDetail({
       if (filtro === "egresos" && (m.importe ?? 0) >= 0) return false;
       if (desde && (m.fecha ?? "") < desde) return false;
       if (hasta && (m.fecha ?? "") > hasta) return false;
-      if (q && !`${m.concepto ?? ""} ${TIPOS_MOV[m.tipo ?? ""] ?? ""} ${MEDIOS[m.medio ?? ""] ?? ""}`.toLowerCase().includes(q)) return false;
+      if (categoriaF && m.categoria !== categoriaF) return false;
+      if (q && !`${m.concepto ?? ""} ${TIPOS_MOV[m.tipo ?? ""] ?? ""} ${MEDIOS[m.medio ?? ""] ?? ""} ${m.categoria ?? ""}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [conSaldo, filtro, desde, hasta, busqueda]);
+  }, [conSaldo, filtro, desde, hasta, busqueda, categoriaF]);
+  const categoriasMov = useMemo(() => [...new Set((data ?? []).map((m) => m.categoria).filter((c): c is string => !!c))].sort(), [data]);
 
   const totIngresos = movimientos.reduce((s, m) => s + Math.max(m.importe ?? 0, 0), 0);
   const totEgresos = movimientos.reduce((s, m) => s + Math.min(m.importe ?? 0, 0), 0);
-  const hayFiltros = filtro !== "todos" || desde || hasta || busqueda;
+  const hayFiltros = filtro !== "todos" || desde || hasta || busqueda || categoriaF;
 
   function exportar() {
     exportCsv(
@@ -628,6 +643,7 @@ function AccountDetail({
         Fecha: fecha(m.fecha),
         Tipo: TIPOS_MOV[m.tipo ?? ""] ?? m.tipo,
         Concepto: m.concepto,
+        Categoría: m.categoria ?? "",
         Medio: MEDIOS[m.medio ?? ""] ?? "",
         Ingreso: (m.importe ?? 0) > 0 ? m.importe : "",
         Egreso: (m.importe ?? 0) < 0 ? -(m.importe ?? 0) : "",
@@ -707,10 +723,20 @@ function AccountDetail({
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
               className={cn(inputCls, "pl-9")}
-              placeholder="Buscar por concepto, tipo o medio..."
+              placeholder="Buscar por concepto, categoría, tipo o medio..."
             />
           </div>
           <div className="flex items-end gap-3 flex-wrap">
+            <FormGroup label="Categoría">
+              <select className={cn(selectCls, "w-48")} value={categoriaF} onChange={(e) => setCategoriaF(e.target.value)}>
+                <option value="">Todas</option>
+                {categoriasMov.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </FormGroup>
             <FormGroup label="Desde">
               <input type="date" className={cn(inputCls, "w-40")} value={desde} onChange={(e) => setDesde(e.target.value)} />
             </FormGroup>
@@ -733,6 +759,7 @@ function AccountDetail({
                   setDesde("");
                   setHasta("");
                   setBusqueda("");
+                  setCategoriaF("");
                 }}
                 className="h-10 px-3 rounded-lg text-[11px] font-bold text-secondary hover:bg-secondary/5"
               >
@@ -766,6 +793,7 @@ function AccountDetail({
                   <th className="py-3 px-4">Fecha</th>
                   <th className="py-3 px-4">Tipo</th>
                   <th className="py-3 px-4">Concepto</th>
+                  <th className="py-3 px-4">Categoría</th>
                   <th className="py-3 px-4">Medio</th>
                   <th className="py-3 px-4 text-right">Ingreso (+)</th>
                   <th className="py-3 px-4 text-right">Egreso (-)</th>
@@ -774,7 +802,7 @@ function AccountDetail({
                 </tr>
               </thead>
               <tbody className="text-xs divide-y divide-outline-variant/10">
-                {movimientos.length === 0 && <EmptyRow colSpan={8} label={hayFiltros ? "Ningún movimiento coincide con los filtros" : "Sin movimientos"} />}
+                {movimientos.length === 0 && <EmptyRow colSpan={9} label={hayFiltros ? "Ningún movimiento coincide con los filtros" : "Sin movimientos"} />}
                 {movimientos.map((m) => (
                   <tr key={`${m.origen}-${m.origen_id}-${m.tipo}`} className="hover:bg-surface-container-low/50 transition-colors group">
                     <td className="py-4 px-4 font-numeric text-outline font-medium whitespace-nowrap">{fecha(m.fecha)}</td>
@@ -789,6 +817,16 @@ function AccountDetail({
                       </span>
                     </td>
                     <td className="py-4 px-4 font-bold text-primary">{m.concepto}</td>
+                    <td className="py-4 px-4">
+                      {m.categoria ? (
+                        <span className="px-2 py-1 rounded-full bg-surface-container-high text-secondary font-bold text-[9px] uppercase inline-flex items-center gap-1.5 whitespace-nowrap">
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ background: m.categoria_color ?? undefined }} />
+                          {m.categoria}
+                        </span>
+                      ) : (
+                        <span className="text-outline">—</span>
+                      )}
+                    </td>
                     <td className="py-4 px-4 text-on-surface-variant whitespace-nowrap">{MEDIOS[m.medio ?? ""] ?? "—"}</td>
                     <td className="py-4 px-4 text-right font-bold font-numeric text-on-tertiary-container">
                       {(m.importe ?? 0) > 0 ? signedMoney(m.importe!, moneda) : "—"}

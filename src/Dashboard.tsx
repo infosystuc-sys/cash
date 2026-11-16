@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { PlusCircle, Calendar, TrendingUp, BadgeCheck, AlertTriangle, Terminal, History, Landmark, DollarSign, Receipt, Wallet, TrendingDown } from "lucide-react";
+import { PlusCircle, Calendar, BadgeCheck, AlertTriangle, Landmark, DollarSign, Receipt, Wallet, TrendingDown } from "lucide-react";
 import { cn } from "./lib/utils";
 import { supabase, check } from "./lib/supabase";
 import { useData } from "./lib/useData";
@@ -10,6 +10,7 @@ import { useDetalle, tarjetaClickeable, type ColumnaDetalle } from "./components
 import { ReporteVentas } from "./components/ReporteVentas";
 import { ReporteEgresos } from "./components/ReporteEgresos";
 import { CashflowHorizontal } from "./components/CashflowHorizontal";
+import { LineaDeTiempo, type ItemLinea } from "./components/LineaDeTiempo";
 
 type Periodo = "day" | "week" | "month";
 
@@ -45,29 +46,48 @@ export default function Dashboard() {
   const en30 = sumarDias(hoy, 30);
 
   const { data, loading, error, reload } = useData(async () => {
-    const [cuentas, cheques, cobros, pagos, tc] = await Promise.all([
+    const inicio3 = sumarMeses(hoy.slice(0, 8) + "01", -3);
+    const [cuentas, cheques, cobros, pagos, tc, cuentasTodas, movs] = await Promise.all([
       supabase.from("v_cuentas_saldo").select("id, nombre, tipo, moneda, saldo, saldo_ars").eq("activa", true).order("id"),
       supabase.from("cheques").select("importe").eq("estado", "en_cartera"),
       supabase
         .from("v_ingreso_vencimientos")
         .select("id, fecha_vencimiento, saldo, moneda, estado, medio_previsto, cuentas(nombre), ingresos(descripcion, clientes(razon_social), tipos_ingreso(nombre))")
         .gt("saldo", 0)
-        .lte("fecha_vencimiento", en30)
         .order("fecha_vencimiento"),
       supabase
         .from("v_deuda_cuotas")
         .select("id, numero, fecha_vencimiento, saldo, moneda, estado, deudas(concepto, proveedores(razon_social), categorias_egreso(nombre))")
         .gt("saldo", 0)
-        .lte("fecha_vencimiento", en30)
         .order("fecha_vencimiento"),
       supabase.from("v_cotizacion_actual").select("venta").maybeSingle(),
+      supabase.from("v_cuentas_saldo").select("id, moneda, fecha_saldo_inicial"),
+      traerTodo((a, b) =>
+        supabase
+          .from("v_movimientos")
+          .select("cuenta_id, fecha, importe")
+          .gte("fecha", inicio3)
+          .not("tipo", "in", "(transferencia_salida,transferencia_entrada)")
+          .range(a, b),
+      ),
     ]);
+    const cot = tc.data?.venta ?? 0;
+    const mapa = new Map(check(cuentasTodas).map((c) => [c.id, c]));
+    // Movimientos reales en ARS (USD al TC actual), respetando la fecha de saldo inicial de cada cuenta
+    const reales = movs.flatMap((m) => {
+      const cu = mapa.get(m.cuenta_id);
+      if (!cu || !m.fecha || (cu.fecha_saldo_inicial && m.fecha < cu.fecha_saldo_inicial)) return [];
+      return [{ fecha: m.fecha, ars: cu.moneda === "USD" ? (m.importe ?? 0) * cot : m.importe ?? 0 }];
+    });
     return {
       cuentas: check(cuentas),
       cartera: check(cheques),
       cobros: check(cobros),
       pagos: check(pagos),
-      tc: tc.data?.venta ?? 0,
+      tc: cot,
+      movs: reales,
+      // Desde cuándo hay movimientos registrados (la cuenta con saldo inicial más antiguo)
+      inicioDatos: check(cuentasTodas).map((c) => c.fecha_saldo_inicial ?? hoy).sort()[0] ?? hoy,
     };
   });
 
@@ -217,16 +237,164 @@ export default function Dashboard() {
     });
   }
 
+  // ---------- Líneas de tiempo ----------
+  // Real: movimientos registrados en las cuentas (sin transferencias internas), USD al TC actual
+  async function cargarReal(d: string, h: string): Promise<ItemLinea[]> {
+    const [cuentas, tc, movs, egresos] = await Promise.all([
+      supabase.from("v_cuentas_saldo").select("id, nombre, moneda, fecha_saldo_inicial"),
+      supabase.from("v_cotizacion_actual").select("venta").maybeSingle(),
+      traerTodo((a, b) =>
+        supabase
+          .from("v_movimientos")
+          .select("*")
+          .gte("fecha", d)
+          .lte("fecha", h)
+          .not("tipo", "in", "(transferencia_salida,transferencia_entrada)")
+          .order("fecha")
+          .order("created_at")
+          .range(a, b),
+      ),
+      traerTodo((a, b) => supabase.from("v_egresos").select("id, categoria, categoria_color, proveedor").gte("fecha", d).lte("fecha", h).range(a, b)),
+    ]);
+    const cot = tc.data?.venta ?? 0;
+    const mapaCuentas = new Map(check(cuentas).map((c) => [c.id, c]));
+    const mapaEgresos = new Map(egresos.map((e) => [e.id, e]));
+    const items: ItemLinea[] = [];
+    movs.forEach((m, k) => {
+      const cu = mapaCuentas.get(m.cuenta_id);
+      if (!cu || !m.fecha || (cu.fecha_saldo_inicial && m.fecha < cu.fecha_saldo_inicial)) return;
+      const ars = cu.moneda === "USD" ? Math.round((m.importe ?? 0) * cot * 100) / 100 : m.importe ?? 0;
+      const e = m.origen === "egresos" ? mapaEgresos.get(m.origen_id) : undefined;
+      items.push({
+        clave: `${m.origen}-${m.origen_id}-${m.tipo}-${k}`,
+        fecha: m.fecha,
+        ars,
+        tipo: ORIGEN_FLUJO[m.tipo ?? ""] ?? m.tipo ?? "",
+        concepto: m.concepto ?? "",
+        detalle: [e?.proveedor, cu.nombre].filter(Boolean).join(" • "),
+        categoria: e?.categoria ?? null,
+        categoriaColor: e?.categoria_color ?? null,
+      });
+    });
+    return items;
+  }
+
+  // Proyectado: vencimientos pendientes de cobro y de pago (incluye lo vencido) y cheques en cartera
+  async function cargarProyectado(d: string, h: string): Promise<ItemLinea[]> {
+    const movs = check(await supabase.rpc("fn_cashflow_detalle", { p_desde: d, p_hasta: h })) as Mov[];
+    return movs
+      .filter((m) => m.proyectado)
+      .map((m, k) => ({
+        clave: `${m.origen}-${m.ref_id}-${k}`,
+        fecha: m.fecha,
+        fechaReal: m.fecha_real,
+        ars: m.ars,
+        tipo: ORIGEN_FLUJO[m.origen] ?? m.origen,
+        concepto: m.concepto,
+        detalle: m.detalle,
+        origen: m.origen,
+        refId: m.ref_id,
+      }));
+  }
+
+  // ---------- Indicadores ----------
   const k = useMemo(() => {
     if (!data) return null;
     const ars = (m: string | null, v: number | null) => (m === "USD" ? (v ?? 0) * data.tc : v ?? 0);
     const cuentas = data.cuentas.reduce((s, c) => s + (c.saldo_ars ?? 0), 0);
     const cartera = data.cartera.reduce((s, c) => s + c.importe, 0);
-    const cobrar = data.cobros.reduce((s, v) => s + ars(v.moneda, v.saldo), 0);
-    const pagar = data.pagos.reduce((s, q) => s + ars(q.moneda, q.saldo), 0);
     const consolidado = cuentas + cartera;
-    return { cuentas, cartera, consolidado, cobrar, pagar, proyectado: consolidado + cobrar - pagar };
-  }, [data]);
+
+    const vencidoCobrar = data.cobros.filter((v) => (v.fecha_vencimiento ?? "") < hoy);
+    const vencidoPagar = data.pagos.filter((q) => (q.fecha_vencimiento ?? "") < hoy);
+    const cobros30 = data.cobros.filter((v) => (v.fecha_vencimiento ?? "") <= en30);
+    const pagos30 = data.pagos.filter((q) => (q.fecha_vencimiento ?? "") <= en30);
+    const suma = <T extends { moneda: string | null; saldo: number | null }>(l: T[]) => l.reduce((s, x) => s + ars(x.moneda, x.saldo), 0);
+    const cobrar = suma(data.cobros);
+    const pagar = suma(data.pagos);
+    const cobrar30 = suma(cobros30);
+    const pagar30 = suma(pagos30);
+
+    // Movimientos reales: mes en curso, mes anterior (completo y a la misma fecha) y promedio de los 3 meses cerrados
+    const inicioMes = hoy.slice(0, 8) + "01";
+    const inicioAnt = sumarMeses(inicioMes, -1);
+    const finAnt = sumarDias(inicioMes, -1);
+    const mismaFechaAnt = [sumarDias(inicioAnt, Number(hoy.slice(8, 10)) - 1), finAnt].sort()[0];
+    const inicio3 = sumarMeses(inicioMes, -3);
+    const tot = (desde: string, hasta: string, signo: 1 | -1) =>
+      data.movs.filter((m) => m.fecha >= desde && m.fecha <= hasta && m.ars * signo > 0).reduce((s, m) => s + Math.abs(m.ars), 0);
+    const ingMes = tot(inicioMes, hoy, 1);
+    const egrMes = tot(inicioMes, hoy, -1);
+    const ingAnt = tot(inicioAnt, finAnt, 1);
+    const egrAnt = tot(inicioAnt, finAnt, -1);
+    const ingAntParcial = tot(inicioAnt, mismaFechaAnt, 1);
+    const egrAntParcial = tot(inicioAnt, mismaFechaAnt, -1);
+    // Egreso mensual promedio de los últimos 3 meses cerrados, contando solo el tramo con datos;
+    // si todavía no hay medio mes cerrado con datos, se proyecta el ritmo del mes en curso
+    const desdeProm = [inicio3, data.inicioDatos].sort()[1];
+    const diasProm = Math.round((Date.parse(finAnt) - Date.parse(desdeProm)) / 86_400_000) + 1;
+    const egrProm =
+      diasProm >= 15 ? (tot(desdeProm, finAnt, -1) / diasProm) * 30.44 : (egrMes / Math.max(Number(hoy.slice(8, 10)), 1)) * 30.44;
+    const promLabel = diasProm >= 15 ? (diasProm >= 85 ? "Prom. 3 meses" : `Prom. desde ${fechaCorta(desdeProm)}`) : "Ritmo del mes";
+
+    return {
+      cuentas,
+      cartera,
+      consolidado,
+      cobrar,
+      pagar,
+      cobrar30,
+      pagar30,
+      cobros30,
+      pagos30,
+      vencidoCobrar: suma(vencidoCobrar),
+      vencidoCobrarN: vencidoCobrar.length,
+      vencidoPagar: suma(vencidoPagar),
+      vencidoPagarN: vencidoPagar.length,
+      proyectado: consolidado + cobrar30 - pagar30,
+      ingMes,
+      egrMes,
+      netoMes: ingMes - egrMes,
+      ingAnt,
+      egrAnt,
+      varIng: ingAntParcial > 0 ? (ingMes - ingAntParcial) / ingAntParcial : null,
+      varEgr: egrAntParcial > 0 ? (egrMes - egrAntParcial) / egrAntParcial : null,
+      egrProm,
+      promLabel,
+      cobertura: egrProm > 0 ? cuentas / egrProm : null,
+      inicioMes,
+    };
+  }, [data, hoy, en30]);
+
+  const variacion = (v: number | null) => (v == null ? "Sin mes anterior" : `${v >= 0 ? "▲" : "▼"} ${Math.abs(v * 100).toLocaleString("es-AR", { maximumFractionDigits: 0 })}% vs mes ant.`);
+
+  const listaCobros = (titulo: string, filas: NonNullable<typeof data>["cobros"], total: number) =>
+    detalle.abrir({
+      titulo,
+      subtitulo: "Vencimientos de facturas con saldo pendiente (USD al TC actual)",
+      filas,
+      columnas: [
+        { titulo: "Vencimiento", valor: (v) => <span className={(v.fecha_vencimiento ?? "") < hoy ? "text-error font-bold" : ""}>{fecha(v.fecha_vencimiento)}</span> },
+        { titulo: "Cliente", valor: (v) => <strong className="text-primary">{v.ingresos?.clientes?.razon_social}</strong> },
+        { titulo: "Descripción", valor: (v) => v.ingresos?.descripcion },
+        { titulo: "Saldo", valor: (v) => money(v.moneda === "USD" ? (v.saldo ?? 0) * (data?.tc ?? 0) : v.saldo, "ARS"), alinear: "right" },
+      ],
+      total: money(total),
+    });
+
+  const listaPagos = (titulo: string, filas: NonNullable<typeof data>["pagos"], total: number) =>
+    detalle.abrir({
+      titulo,
+      subtitulo: "Cuotas de deudas con saldo pendiente (USD al TC actual)",
+      filas,
+      columnas: [
+        { titulo: "Vencimiento", valor: (q) => <span className={(q.fecha_vencimiento ?? "") < hoy ? "text-error font-bold" : ""}>{fecha(q.fecha_vencimiento)}</span> },
+        { titulo: "Acreedor", valor: (q) => <strong className="text-primary">{q.deudas?.proveedores?.razon_social}</strong> },
+        { titulo: "Concepto", valor: (q) => `${q.deudas?.concepto ?? ""} • cuota ${q.numero}` },
+        { titulo: "Saldo", valor: (q) => money(q.moneda === "USD" ? (q.saldo ?? 0) * (data?.tc ?? 0) : q.saldo, "ARS"), alinear: "right" },
+      ],
+      total: money(total),
+    });
 
   return (
     <div className="flex flex-col gap-8">
@@ -236,26 +404,13 @@ export default function Dashboard() {
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[11px] font-bold text-secondary uppercase tracking-widest">Módulo de Tesorería</span>
             <span className="text-outline text-xs">•</span>
-            <span className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Buenos Aires Hub</span>
+            <span className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">{fecha(hoy)}</span>
           </div>
           <h1 className="text-2xl font-bold text-primary tracking-tight">Tablero de Cash Flow</h1>
-          <p className="text-sm text-on-surface-variant">Proyección y consolidación de tesorería en pesos argentinos ($ ARS)</p>
+          <p className="text-sm text-on-surface-variant">Posición, movimientos reales y proyección de tesorería consolidados en pesos ($ ARS)</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <Segmented
-            value={periodo}
-            onChange={setPeriodo}
-            options={(Object.keys(RANGOS) as Periodo[]).map((p) => ({ value: p, label: RANGOS[p].label }))}
-          />
-
-          <div className="flex items-center gap-2 px-4 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-sm">
-            <Calendar className="w-4 h-4 text-outline" />
-            <span className="text-xs font-bold text-on-surface">
-              {fecha(desde)} al {fecha(hasta)}
-            </span>
-          </div>
-
           <button
             onClick={() => navigate("/ingresos?nuevo=1")}
             className="flex items-center gap-2 bg-secondary text-on-secondary px-5 py-2 rounded-lg text-xs font-bold hover:bg-secondary-container transition-all shadow-md"
@@ -279,17 +434,17 @@ export default function Dashboard() {
 
       {data && k && (
         <>
-          {/* KPI Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+          {/* Indicadores */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <KpiCard
-              title="Saldo Total Consolidado"
+              title="Disponibilidades"
               value={money(k.consolidado)}
               tag={`${data.cuentas.length} cuentas`}
-              subtitle="Cuentas + cartera de cheques"
-              stats={`Cartera ${money(k.cartera)}`}
+              subtitle={`Cuentas ${money(k.cuentas)}`}
+              stats={`Cheques ${money(k.cartera)}`}
               onClick={() =>
                 detalle.abrir<FilaSaldo>({
-                  titulo: "Saldo Total Consolidado",
+                  titulo: "Disponibilidades",
                   subtitulo: "Saldo de cada cuenta (USD al TC actual) y cheques en cartera",
                   cargar: async () => {
                     const cheques = check(
@@ -316,59 +471,69 @@ export default function Dashboard() {
               }
             />
             <KpiCard
-              title="A Cobrar (Próx. 30 días)"
-              value={money(k.cobrar)}
-              tag={`${data.cobros.length} cobros`}
-              subtitle="Vencimientos facturados (incl. vencidos)"
-              stats={`${data.cobros.filter((c) => c.estado === "vencido").length} vencidos`}
-              statsColor="text-error"
-              onClick={() =>
-                detalle.abrir({
-                  titulo: "A Cobrar (Próx. 30 días)",
-                  subtitulo: `Vencimientos pendientes hasta el ${fecha(en30)}, incluidos los vencidos`,
-                  filas: data.cobros,
-                  columnas: [
-                    { titulo: "Vencimiento", valor: (v) => <span className={v.estado === "vencido" ? "text-error font-bold" : ""}>{fecha(v.fecha_vencimiento)}</span> },
-                    { titulo: "Cliente", valor: (v) => <strong className="text-primary">{v.ingresos?.clientes?.razon_social}</strong> },
-                    { titulo: "Descripción", valor: (v) => v.ingresos?.descripcion },
-                    { titulo: "Saldo", valor: (v) => money(v.moneda === "USD" ? (v.saldo ?? 0) * data.tc : v.saldo, "ARS"), alinear: "right" },
-                  ],
-                  total: money(k.cobrar),
-                })
-              }
+              title="Ingresos del mes"
+              value={money(k.ingMes)}
+              tag="Real"
+              tagColor="bg-tertiary-container/20 text-on-tertiary-container"
+              subtitle={`Mes ant. ${money(k.ingAnt)}`}
+              stats={variacion(k.varIng)}
+              statsColor={k.varIng != null && k.varIng < 0 ? "text-error" : "text-on-tertiary-container"}
             />
             <KpiCard
-              title="A Pagar (Próx. 30 días)"
-              value={money(k.pagar)}
-              tag={`${data.pagos.length} vencimientos`}
+              title="Egresos del mes"
+              value={money(k.egrMes)}
+              tag="Real"
               tagColor="bg-error-container text-error"
-              subtitle="Cuotas de deudas pendientes"
-              stats={data.tc ? `TC ${money(data.tc)}` : "Sin TC"}
-              onClick={() =>
-                detalle.abrir({
-                  titulo: "A Pagar (Próx. 30 días)",
-                  subtitulo: `Cuotas de deudas pendientes hasta el ${fecha(en30)}, incluidas las vencidas`,
-                  filas: data.pagos,
-                  columnas: [
-                    { titulo: "Vencimiento", valor: (q) => <span className={q.estado === "vencida" ? "text-error font-bold" : ""}>{fecha(q.fecha_vencimiento)}</span> },
-                    { titulo: "Acreedor", valor: (q) => <strong className="text-primary">{q.deudas?.proveedores?.razon_social}</strong> },
-                    { titulo: "Concepto", valor: (q) => `${q.deudas?.concepto ?? ""} • cuota ${q.numero}` },
-                    { titulo: "Saldo", valor: (q) => money(q.moneda === "USD" ? (q.saldo ?? 0) * data.tc : q.saldo, "ARS"), alinear: "right" },
-                  ],
-                  total: money(k.pagar),
-                })
-              }
+              subtitle={`Mes ant. ${money(k.egrAnt)}`}
+              stats={variacion(k.varEgr)}
+              statsColor={k.varEgr != null && k.varEgr > 0 ? "text-error" : "text-on-tertiary-container"}
+            />
+            <KpiCard
+              title="Resultado de caja del mes"
+              value={signedMoney(k.netoMes)}
+              valueColor={k.netoMes < 0 ? "text-error" : "text-on-tertiary-container"}
+              tag={k.netoMes >= 0 ? "Superávit" : "Déficit"}
+              tagColor={k.netoMes >= 0 ? "bg-tertiary-container/20 text-on-tertiary-container" : "bg-error-container text-error"}
+              subtitle="Ingresos − egresos reales"
+              stats={k.ingMes > 0 ? `${Math.round((k.netoMes / k.ingMes) * 100)}% de los ingresos` : "—"}
+            />
+            <KpiCard
+              title="A cobrar"
+              value={money(k.cobrar)}
+              tag={`${data.cobros.length} vencimientos`}
+              subtitle={`Próx. 30 días ${money(k.cobrar30)}`}
+              stats={k.vencidoCobrarN ? `${money(k.vencidoCobrar)} vencido` : "Sin vencidos"}
+              statsColor={k.vencidoCobrarN ? "text-error" : "text-on-tertiary-container"}
+              onClick={() => listaCobros("A cobrar • total pendiente", data.cobros, k.cobrar)}
+            />
+            <KpiCard
+              title="A pagar"
+              value={money(k.pagar)}
+              tag={`${data.pagos.length} cuotas`}
+              tagColor="bg-error-container text-error"
+              subtitle={`Próx. 30 días ${money(k.pagar30)}`}
+              stats={k.vencidoPagarN ? `${money(k.vencidoPagar)} vencido` : "Sin vencidos"}
+              statsColor={k.vencidoPagarN ? "text-error" : "text-on-tertiary-container"}
+              onClick={() => listaPagos("A pagar • total pendiente", data.pagos, k.pagar)}
+            />
+            <KpiCard
+              title="Cobertura de caja"
+              value={k.cobertura == null ? "—" : `${k.cobertura.toLocaleString("es-AR", { maximumFractionDigits: 1 })} meses`}
+              valueColor={k.cobertura != null && k.cobertura < 1 ? "text-error" : "text-primary"}
+              tag="Runway"
+              subtitle="Saldo en cuentas / egreso mensual promedio"
+              stats={`${k.promLabel} ${money(k.egrProm)}`}
             />
             <div
               title="Ver detalle"
               onClick={() =>
                 detalle.abrir<FilaSaldo>({
                   titulo: "Saldo Proyectado 30 días",
-                  subtitulo: "Saldo actual + cobros previstos − pagos previstos",
+                  subtitulo: "Disponibilidades + cobros previstos − pagos previstos (incluye vencidos)",
                   filas: [
                     { tipo: "Saldo actual", nombre: "Cuentas + cartera de cheques", detalle: "", importe: k.consolidado },
-                    { tipo: "+ Cobros", nombre: "A cobrar próximos 30 días", detalle: `${data.cobros.length} vencimientos`, importe: k.cobrar },
-                    { tipo: "− Pagos", nombre: "A pagar próximos 30 días", detalle: `${data.pagos.length} cuotas`, importe: -k.pagar },
+                    { tipo: "+ Cobros", nombre: "A cobrar hasta el " + fecha(en30), detalle: `${k.cobros30.length} vencimientos`, importe: k.cobrar30 },
+                    { tipo: "− Pagos", nombre: "A pagar hasta el " + fecha(en30), detalle: `${k.pagos30.length} cuotas`, importe: -k.pagar30 },
                   ],
                   columnas: colsSaldo,
                   total: money(k.proyectado),
@@ -384,241 +549,180 @@ export default function Dashboard() {
                   {k.proyectado >= 0 ? "Solvencia Positiva" : "Déficit proyectado"}
                 </div>
               </div>
-              <div className="text-2xl font-bold font-numeric tracking-tight">{money(k.proyectado)}</div>
+              <div className="text-xl font-bold font-numeric tracking-tight">{money(k.proyectado)}</div>
               <div className="flex items-center justify-between mt-4 pt-4 border-t border-on-primary/10 text-[10px]">
-                <span className="text-primary-fixed/80">Saldo actual + Cobros - Pagos</span>
-                <span className="font-bold text-secondary-fixed">{signedMoney(k.cobrar - k.pagar)} neto</span>
+                <span className="text-primary-fixed/80">Hoy + cobros − pagos</span>
+                <span className="font-bold text-secondary-fixed">{signedMoney(k.cobrar30 - k.pagar30)} neto</span>
               </div>
             </div>
           </div>
 
-          {/* Quick Entry Banner */}
-          <div className="bg-surface-container-lowest border border-outline-variant/20 p-4 rounded-xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-surface-container-high flex items-center justify-center text-secondary border border-outline-variant/30">
-                <Terminal className="w-6 h-6" />
-              </div>
-              <div>
-                <div className="font-bold text-primary text-sm">Emisión Rápida de Honorarios de Consultoría</div>
-                <p className="text-xs text-on-surface-variant">Registrá la factura y su plan de vencimientos en un solo paso.</p>
+          {/* Saldos por cuenta (horizontal) */}
+          <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-sm">
+            <div className="flex items-center gap-3 overflow-x-auto p-3">
+              <span className="px-3 text-[10px] font-bold text-outline uppercase tracking-widest whitespace-nowrap">Saldo por cuenta</span>
+              {data.cuentas.map((c) => (
+                <CuentaChip
+                  key={c.id}
+                  nombre={c.nombre ?? ""}
+                  detalle={c.moneda === "USD" ? money(c.saldo, "USD") : c.tipo === "efectivo" ? "Efectivo" : "Banco"}
+                  saldo={money(c.saldo_ars)}
+                  icono={c.moneda === "USD" ? "usd" : c.tipo === "efectivo" ? "cash" : "bank"}
+                  negativo={(c.saldo_ars ?? 0) < 0}
+                  onClick={() => navigate("/cuentas")}
+                />
+              ))}
+              <CuentaChip nombre="Cheques en cartera" detalle={`${data.cartera.length} cheques`} saldo={money(k.cartera)} icono="cheque" onClick={() => navigate("/cheques")} />
+              <div className="ml-auto pl-4 pr-3 flex flex-col items-end whitespace-nowrap border-l border-outline-variant/20">
+                <span className="text-[9px] font-bold text-outline uppercase tracking-widest">Total ARS</span>
+                <span className="text-sm font-bold text-secondary font-numeric">{money(k.consolidado)}</span>
               </div>
             </div>
-            <button
-              onClick={() => navigate("/ingresos?nuevo=1")}
-              className="px-4 py-1.5 bg-surface-container-high text-primary rounded-lg text-xs font-bold hover:bg-surface-container-highest transition-colors border border-outline-variant/30"
-            >
-              Nueva Factura de Servicios
-            </button>
           </div>
+
+          {/* Cronología real */}
+          <LineaDeTiempo
+            modo="real"
+            titulo="Cronología de ingresos y egresos"
+            subtitulo="Dinero que efectivamente entró y salió de las cuentas"
+            hoy={hoy}
+            saldoHoy={k.cuentas}
+            cargar={cargarReal}
+          />
+
+          {/* Proyección */}
+          <LineaDeTiempo
+            modo="proyectado"
+            titulo="Proyección de cobros y pagos"
+            subtitulo="Facturas a cobrar, cheques en cartera y cuotas de deuda a pagar"
+            hoy={hoy}
+            saldoHoy={k.cuentas}
+            cargar={cargarProyectado}
+            puedeCambiarFecha={(i) => VENCIMIENTO_EDITABLE.has(i.origen ?? "")}
+            onCambiarFecha={async (i, nueva) => {
+              check(await supabase.rpc("cambiar_vencimiento", { p_origen: i.origen!, p_id: i.refId!, p_fecha: nueva }));
+              flujo.reload();
+              reload();
+            }}
+          />
         </>
       )}
 
-      {/* Main Content: Chart and Accounts */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <div className="lg:col-span-8 space-y-8">
-          <div className="bg-surface-container-lowest border border-outline-variant/20 p-6 rounded-xl shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-              <div>
-                <h2 className="text-lg font-bold text-primary">Evolución y Proyección de Flujo de Fondos ({RANGOS[periodo].label})</h2>
-                <p className="text-xs text-on-surface-variant">Movimientos reales hasta hoy y vencimientos programados en adelante</p>
-              </div>
-              <div className="flex items-center gap-4 text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-on-tertiary-container" /> Ingresos
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-sm bg-error" /> Egresos
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-0.5 bg-secondary rounded-full" /> Saldo
-                </div>
-              </div>
-            </div>
-
-            <div className="h-64 relative bg-surface-container-low/30 rounded-xl border border-outline-variant/10 p-4">
-              {flujo.data ? <Grafico filas={flujo.data} /> : <Loading />}
-            </div>
-
-            <div className="flex items-center justify-between mt-4 text-[10px] text-outline font-medium italic">
-              <span>* Desde hoy: disponibilidades reales + vencimientos pendientes a cobrar, cheques en cartera y cuotas de deuda</span>
-              {flujo.data && (
-                <div className="flex items-center gap-2 not-italic">
-                  <span className="text-on-surface-variant font-bold uppercase tracking-wider">Máximo Proyectado:</span>
-                  <span className="text-secondary font-numeric text-xs font-bold">{money(Math.max(...flujo.data.map((f) => f.saldo_final)))}</span>
-                </div>
-              )}
-            </div>
+      {/* Flujo de fondos por período */}
+      <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-sm overflow-hidden">
+        <div className="p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-primary">Flujo de fondos por período ({RANGOS[periodo].label})</h2>
+            <p className="text-xs text-on-surface-variant">
+              Hasta ayer, movimientos reales. Desde hoy, disponibilidades + lo pendiente de cobro y pago. Consolidado en ARS; USD al TC actual.
+            </p>
           </div>
-
-          <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-outline-variant/10">
-              <h3 className="text-sm font-bold text-primary">Detalle de Movimientos por Período</h3>
-              <p className="text-xs text-on-surface-variant">
-                Hasta ayer, movimientos reales. Desde hoy, disponibilidades + lo pendiente de cobro y pago. Consolidado en ARS; USD al TC MEP actual.
-              </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-4 text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-sm bg-on-tertiary-container" /> Ingresos
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-sm bg-error" /> Egresos
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-0.5 bg-secondary rounded-full" /> Saldo
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-surface-container-low/50 text-[10px] font-bold text-outline uppercase tracking-widest">
-                    <th className="px-6 py-3">Período</th>
-                    <th className="px-4 py-3 text-right">Saldo Inicial</th>
-                    <th className="px-4 py-3 text-right">Ingresos</th>
-                    <th className="px-4 py-3 text-right">Egresos</th>
-                    <th className="px-4 py-3 text-right">Flujo Neto</th>
-                    <th className="px-4 py-3 text-right">Saldo Final</th>
-                    <th className="px-6 py-3 text-center">Tipo</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-outline-variant/10 text-xs">
-                  {flujo.data?.map((f) => {
-                    const neg = f.neto < 0;
-                    const actual = f.proyectado && f.periodo_inicio <= hoy;
-                    return (
-                      <React.Fragment key={f.periodo_inicio}>
-                      {f === primerProyectado && (
-                        <tr onClick={verDisponible} title="Ver saldo por cuenta" className="bg-secondary-fixed/30 hover:bg-secondary-fixed/50 cursor-pointer border-y-2 border-secondary/30">
-                          <td className="px-6 py-3">
-                            <div className="flex flex-col">
-                              <span className="font-bold text-sm text-secondary flex items-center gap-1.5">
-                                <Wallet className="w-4 h-4" /> Disponibilidades al {fecha(hoy)}
-                              </span>
-                              <span className="text-[10px] text-on-surface-variant">Saldo real de las cuentas • punto de partida de la proyección</span>
-                            </div>
-                          </td>
-                          <td colSpan={4} />
-                          <td className="px-4 py-3 text-right font-numeric font-bold text-secondary text-sm hover:underline decoration-dotted underline-offset-4">{money(f.saldo_inicial)}</td>
-                          <td className="px-6 py-3 text-center">
-                            <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-secondary text-on-secondary">Hoy</span>
-                          </td>
-                        </tr>
-                      )}
-                      <tr className={cn("hover:bg-surface-container-low/60 transition-colors", neg && "bg-error-container/5")}>
-                        <td className="px-6 py-4">
-                          <div className="flex flex-col">
-                            <span className={cn("font-bold text-sm", neg ? "text-error" : "text-primary")}>{etiquetaPeriodo(periodo, f.periodo_inicio)}</span>
-                            {periodo !== "day" && (
-                              <span className="text-[10px] text-outline font-numeric">
-                                {actual ? `${fechaCorta(hoy)} (hoy)` : fechaCorta(f.periodo_inicio)} al {fechaCorta(f.periodo_fin)}
-                              </span>
-                            )}
-                            {periodo === "day" && actual && <span className="text-[10px] text-secondary font-bold">Hoy</span>}
-                          </div>
-                        </td>
-                        <CeldaDetalle className="text-on-surface-variant" onClick={() => verFlujo(f, "saldo_inicial")}>
-                          {money(f.saldo_inicial)}
-                        </CeldaDetalle>
-                        <CeldaDetalle className="text-on-tertiary-container font-bold" onClick={() => verFlujo(f, "ingresos")}>
-                          {signedMoney(f.ingresos)}
-                        </CeldaDetalle>
-                        <CeldaDetalle className="text-error font-bold" onClick={() => verFlujo(f, "egresos")}>
-                          {money(-f.egresos)}
-                        </CeldaDetalle>
-                        <CeldaDetalle className={cn("font-bold", neg ? "text-error" : "text-on-tertiary-container")} onClick={() => verFlujo(f, "neto")}>
-                          {signedMoney(f.neto)}
-                        </CeldaDetalle>
-                        <CeldaDetalle className="font-bold text-primary" onClick={() => verFlujo(f, "saldo_final")}>
-                          {money(f.saldo_final)}
-                        </CeldaDetalle>
-                        <td className="px-6 py-4 text-center">
-                          <span
-                            className={cn(
-                              "px-2 py-0.5 rounded text-[9px] font-bold uppercase",
-                              f.proyectado ? "bg-secondary-fixed text-on-secondary-fixed" : "bg-surface-container-high text-on-surface-variant",
-                            )}
-                          >
-                            {f.proyectado ? "Proyectado" : "Real"}
-                          </span>
-                        </td>
-                      </tr>
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <Segmented value={periodo} onChange={setPeriodo} options={(Object.keys(RANGOS) as Periodo[]).map((p) => ({ value: p, label: RANGOS[p].label }))} />
+            <div className="flex items-center gap-2 px-3 py-2 bg-surface-container-low border border-outline-variant/20 rounded-lg">
+              <Calendar className="w-4 h-4 text-outline" />
+              <span className="text-xs font-bold text-on-surface">
+                {fecha(desde)} al {fecha(hasta)}
+              </span>
             </div>
           </div>
         </div>
 
-        {/* Sidebar */}
-        {data && k && (
-          <div className="lg:col-span-4 space-y-6">
-            <div className="bg-surface-container-lowest border border-outline-variant/20 p-6 rounded-xl shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <span className="text-[10px] font-bold text-outline uppercase tracking-widest">Tesorería Activa</span>
-                  <h3 className="text-sm font-bold text-primary">Saldo por Cuenta</h3>
-                </div>
-                <span className="px-2 py-0.5 rounded bg-surface-container text-secondary text-[9px] font-bold uppercase">Hoy</span>
-              </div>
-              <div className="space-y-2">
-                {data.cuentas.map((c) => (
-                  <AccountRow
-                    key={c.id}
-                    name={c.nombre ?? ""}
-                    type={c.moneda === "USD" ? money(c.saldo, "USD") : c.tipo === "efectivo" ? "Efectivo ARS" : "Cuenta ARS"}
-                    balance={c.saldo_ars != null ? money(c.saldo_ars) : "—"}
-                    icon={c.moneda === "USD" ? "usd" : c.tipo === "efectivo" ? "cash" : "bank"}
-                  />
-                ))}
-                <AccountRow name="Cartera de Cheques" type={`${data.cartera.length} cheques en cartera`} balance={money(k.cartera)} icon="cheque" />
-              </div>
-              <div className="mt-4 pt-4 border-t border-outline-variant/10 flex items-center justify-between">
-                <span className="text-xs font-bold text-primary">Consolidado Total ARS</span>
-                <span className="text-sm font-bold text-secondary font-numeric">{money(k.consolidado)}</span>
-              </div>
-            </div>
+        <div className="px-6">
+          <div className="h-56 relative bg-surface-container-low/30 rounded-xl border border-outline-variant/10 p-4">{flujo.data ? <Grafico filas={flujo.data} /> : <Loading />}</div>
+        </div>
 
-            <div className="bg-surface-container-lowest border border-outline-variant/20 p-6 rounded-xl shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <span className="text-[10px] font-bold text-on-tertiary-container uppercase tracking-widest">Entradas Programadas</span>
-                  <h3 className="text-sm font-bold text-primary">Próximos Cobros</h3>
-                </div>
-                <span className="text-[9px] font-bold text-outline uppercase">{data.cobros.filter((c) => c.estado === "vencido").length} vencidos</span>
-              </div>
-              <div className="space-y-3">
-                {data.cobros.length === 0 && <p className="text-xs text-outline">Sin cobros en los próximos 30 días.</p>}
-                {data.cobros.slice(0, 5).map((v) => (
-                  <UpcomingItem
-                    key={v.id}
-                    date={fecha(v.fecha_vencimiento)}
-                    vencido={v.estado === "vencido"}
-                    category={v.ingresos?.tipos_ingreso?.nombre ?? ""}
-                    client={v.ingresos?.clientes?.razon_social ?? ""}
-                    amount={money(v.saldo, v.moneda as Moneda)}
-                    method={v.cuentas?.nombre ? `${v.medio_previsto ?? "Transferencia"} ${v.cuentas.nombre}` : v.medio_previsto ?? "—"}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-surface-container-lowest border border-outline-variant/20 p-6 rounded-xl shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <span className="text-[10px] font-bold text-error uppercase tracking-widest">Salidas Obligatorias</span>
-                  <h3 className="text-sm font-bold text-primary">Próximos Pagos & Deudas</h3>
-                </div>
-              </div>
-              <div className="space-y-3">
-                {data.pagos.length === 0 && <p className="text-xs text-outline">Sin pagos en los próximos 30 días.</p>}
-                {data.pagos.slice(0, 5).map((q) => (
-                  <UpcomingItem
-                    key={q.id}
-                    date={fecha(q.fecha_vencimiento)}
-                    vencido={q.estado === "vencida"}
-                    category={q.deudas?.categorias_egreso?.nombre ?? ""}
-                    client={q.deudas?.proveedores?.razon_social ?? ""}
-                    amount={money(-(q.moneda === "USD" ? (q.saldo ?? 0) * data.tc : q.saldo ?? 0))}
-                    usdValue={q.moneda === "USD" ? money(q.saldo, "USD") : undefined}
-                    method={`${q.deudas?.concepto ?? ""} • cuota ${q.numero}`}
-                    isExpense
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="overflow-x-auto mt-6 border-t border-outline-variant/10">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-surface-container-low/50 text-[10px] font-bold text-outline uppercase tracking-widest">
+                <th className="px-6 py-3">Período</th>
+                <th className="px-4 py-3 text-right">Saldo Inicial</th>
+                <th className="px-4 py-3 text-right">Ingresos</th>
+                <th className="px-4 py-3 text-right">Egresos</th>
+                <th className="px-4 py-3 text-right">Flujo Neto</th>
+                <th className="px-4 py-3 text-right">Saldo Final</th>
+                <th className="px-6 py-3 text-center">Tipo</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-outline-variant/10 text-xs">
+              {flujo.data?.map((f) => {
+                const neg = f.neto < 0;
+                const actual = f.proyectado && f.periodo_inicio <= hoy;
+                return (
+                  <React.Fragment key={f.periodo_inicio}>
+                    {f === primerProyectado && (
+                      <tr onClick={verDisponible} title="Ver saldo por cuenta" className="bg-secondary-fixed/30 hover:bg-secondary-fixed/50 cursor-pointer border-y-2 border-secondary/30">
+                        <td className="px-6 py-3">
+                          <div className="flex flex-col">
+                            <span className="font-bold text-sm text-secondary flex items-center gap-1.5">
+                              <Wallet className="w-4 h-4" /> Disponibilidades al {fecha(hoy)}
+                            </span>
+                            <span className="text-[10px] text-on-surface-variant">Saldo real de las cuentas • punto de partida de la proyección</span>
+                          </div>
+                        </td>
+                        <td colSpan={4} />
+                        <td className="px-4 py-3 text-right font-numeric font-bold text-secondary text-sm hover:underline decoration-dotted underline-offset-4">{money(f.saldo_inicial)}</td>
+                        <td className="px-6 py-3 text-center">
+                          <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-secondary text-on-secondary">Hoy</span>
+                        </td>
+                      </tr>
+                    )}
+                    <tr className={cn("hover:bg-surface-container-low/60 transition-colors", neg && "bg-error-container/5")}>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-col">
+                          <span className={cn("font-bold text-sm", neg ? "text-error" : "text-primary")}>{etiquetaPeriodo(periodo, f.periodo_inicio)}</span>
+                          {periodo !== "day" && (
+                            <span className="text-[10px] text-outline font-numeric">
+                              {actual ? `${fechaCorta(hoy)} (hoy)` : fechaCorta(f.periodo_inicio)} al {fechaCorta(f.periodo_fin)}
+                            </span>
+                          )}
+                          {periodo === "day" && actual && <span className="text-[10px] text-secondary font-bold">Hoy</span>}
+                        </div>
+                      </td>
+                      <CeldaDetalle className="text-on-surface-variant" onClick={() => verFlujo(f, "saldo_inicial")}>
+                        {money(f.saldo_inicial)}
+                      </CeldaDetalle>
+                      <CeldaDetalle className="text-on-tertiary-container font-bold" onClick={() => verFlujo(f, "ingresos")}>
+                        {signedMoney(f.ingresos)}
+                      </CeldaDetalle>
+                      <CeldaDetalle className="text-error font-bold" onClick={() => verFlujo(f, "egresos")}>
+                        {money(-f.egresos)}
+                      </CeldaDetalle>
+                      <CeldaDetalle className={cn("font-bold", neg ? "text-error" : "text-on-tertiary-container")} onClick={() => verFlujo(f, "neto")}>
+                        {signedMoney(f.neto)}
+                      </CeldaDetalle>
+                      <CeldaDetalle className="font-bold text-primary" onClick={() => verFlujo(f, "saldo_final")}>
+                        {money(f.saldo_final)}
+                      </CeldaDetalle>
+                      <td className="px-6 py-4 text-center">
+                        <span
+                          className={cn(
+                            "px-2 py-0.5 rounded text-[9px] font-bold uppercase",
+                            f.proyectado ? "bg-secondary-fixed text-on-secondary-fixed" : "bg-surface-container-high text-on-surface-variant",
+                          )}
+                        >
+                          {f.proyectado ? "Proyectado" : "Real"}
+                        </span>
+                      </td>
+                    </tr>
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <CashflowHorizontal
@@ -727,6 +831,7 @@ const colsSaldo: ColumnaDetalle<FilaSaldo>[] = [
 function KpiCard({
   title,
   value,
+  valueColor = "text-primary",
   tag,
   tagColor = "bg-secondary-fixed/50 text-secondary",
   subtitle,
@@ -736,6 +841,7 @@ function KpiCard({
 }: {
   title: string;
   value: string;
+  valueColor?: string;
   tag?: string;
   tagColor?: string;
   subtitle: string;
@@ -752,11 +858,11 @@ function KpiCard({
         onClick && tarjetaClickeable,
       )}
     >
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 gap-2">
         <span className="text-[10px] font-bold text-outline uppercase tracking-widest">{title}</span>
-        {tag && <span className={cn("px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider", tagColor)}>{tag}</span>}
+        {tag && <span className={cn("px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider whitespace-nowrap", tagColor)}>{tag}</span>}
       </div>
-      <div className="text-xl font-bold font-numeric text-primary tracking-tight">{value}</div>
+      <div className={cn("text-xl font-bold font-numeric tracking-tight", valueColor)}>{value}</div>
       <div className="flex items-center justify-between mt-4 pt-4 border-t border-outline-variant/10 text-[10px] gap-2">
         <span className="text-on-surface-variant font-medium">{subtitle}</span>
         <span className={cn("font-bold font-numeric whitespace-nowrap", statsColor)}>{stats}</span>
@@ -765,72 +871,53 @@ function KpiCard({
   );
 }
 
-function AccountRow({ name, type, balance, icon }: { name: string; type: string; balance: string; icon: "bank" | "usd" | "cash" | "cheque" }) {
-  const isUSD = icon === "usd";
-  const Icono = { bank: Landmark, usd: DollarSign, cash: Wallet, cheque: Receipt }[icon];
+function CuentaChip({
+  nombre,
+  detalle,
+  saldo,
+  icono,
+  negativo = false,
+  onClick,
+}: {
+  nombre: string;
+  detalle: string;
+  saldo: string;
+  icono: "bank" | "usd" | "cash" | "cheque";
+  negativo?: boolean;
+  onClick?: () => void;
+}) {
+  const Icono = { bank: Landmark, usd: DollarSign, cash: Wallet, cheque: Receipt }[icono];
   return (
-    <div className="p-3 bg-surface-container-low/50 border border-outline-variant/10 rounded-lg flex items-center justify-between group hover:bg-surface-container-low transition-colors">
-      <div className="flex items-center gap-3">
-        <div
-          className={cn(
-            "w-8 h-8 rounded-lg flex items-center justify-center border border-outline-variant/20 transition-transform group-hover:scale-105",
-            isUSD ? "bg-tertiary-container/20 text-on-tertiary-container" : "bg-surface-container-lowest text-secondary",
-          )}
-        >
-          <Icono className="w-4 h-4" />
-        </div>
-        <div className="flex flex-col min-w-0">
-          <div className="flex items-center gap-1">
-            <span className="text-xs font-bold text-on-surface truncate">{name}</span>
-            {isUSD && <span className="px-1 rounded bg-tertiary-container/20 text-[8px] font-bold text-on-tertiary-container">USD</span>}
-          </div>
-          <span className="text-[9px] text-outline font-semibold uppercase tracking-wider">{type}</span>
-        </div>
+    <button
+      onClick={onClick}
+      className="shrink-0 flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-container-low/50 border border-outline-variant/10 hover:bg-surface-container-low hover:border-secondary/30 transition-colors text-left"
+    >
+      <div
+        className={cn(
+          "w-8 h-8 rounded-lg flex items-center justify-center border border-outline-variant/20",
+          icono === "usd" ? "bg-tertiary-container/20 text-on-tertiary-container" : "bg-surface-container-lowest text-secondary",
+        )}
+      >
+        <Icono className="w-4 h-4" />
       </div>
-      <span className="text-xs font-bold text-primary font-numeric">{balance}</span>
-    </div>
+      <div className="flex flex-col">
+        <span className="text-[10px] font-bold text-on-surface-variant whitespace-nowrap">
+          {nombre} <span className="text-outline font-medium">• {detalle}</span>
+        </span>
+        <span className={cn("text-sm font-bold font-numeric whitespace-nowrap", negativo ? "text-error" : "text-primary")}>{saldo}</span>
+      </div>
+    </button>
   );
 }
 
-function UpcomingItem({
-  date,
-  category,
-  client,
-  amount,
-  method,
-  isExpense = false,
-  vencido = false,
-  usdValue,
-}: {
-  date: string;
-  category: string;
-  client: string;
-  amount: string;
-  method: string;
-  isExpense?: boolean;
-  vencido?: boolean;
-  usdValue?: string;
-}) {
-  return (
-    <div className="p-3 rounded-lg bg-surface-container-low/40 border border-outline-variant/10 hover:border-outline-variant/30 transition-all flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <span className={cn("text-[9px] font-bold font-numeric", isExpense || vencido ? "text-error" : "text-secondary")}>
-          {date}
-          {vencido && " • VENCIDO"}
-        </span>
-        {category && <span className="px-1.5 py-0.5 rounded bg-surface-container-high text-[8px] font-bold text-primary uppercase tracking-tighter">{category}</span>}
-      </div>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1 min-w-0">
-          <span className="text-xs font-bold text-primary truncate">{client}</span>
-          {usdValue && <span className="text-[9px] text-outline font-numeric">({usdValue})</span>}
-        </div>
-        <span className={cn("text-xs font-bold font-numeric", isExpense ? "text-error" : "text-on-tertiary-container")}>{amount}</span>
-      </div>
-      <span className="text-[9px] text-outline font-medium flex items-center gap-1">
-        <History className="w-2.5 h-2.5" />
-        {method}
-      </span>
-    </div>
-  );
+/** Trae todas las filas de una consulta paginando de a 1000 (límite de PostgREST). */
+async function traerTodo<T>(consulta: (desde: number, hasta: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) {
+  const filas: T[] = [];
+  for (let i = 0; ; i += 1000) {
+    const res = await consulta(i, i + 999);
+    if (res.error) throw new Error(res.error.message);
+    filas.push(...(res.data ?? []));
+    if ((res.data ?? []).length < 1000) break;
+  }
+  return filas;
 }
