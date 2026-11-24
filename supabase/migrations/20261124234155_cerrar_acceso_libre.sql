@@ -11,21 +11,22 @@
 -- que en el proyecto compartido le habría quitado a anon funciones del ERP
 -- (por ejemplo, las del link público de cotizaciones).
 --
--- Requiere que antes se haya corrido 20261124000001_esquema_cashflow.
+-- Requiere que antes se haya corrido 20261124234118_esquema_cashflow.
 -- Antes de correrla, confirmar que en cashflow.usuarios_autorizados están los
 -- emails de todos los que usan la app.
 -- =====================================================================
 
+-- En todas las tablas donde esté: además de las 14 de la migración original,
+-- migraciones posteriores la agregaron en ventas_historicas y cheque_cambios.
 do $$
 declare
-  t text;
+  r record;
 begin
-  foreach t in array array[
-    'tipos_ingreso', 'clientes', 'proveedores', 'categorias_egreso', 'cuentas', 'cotizaciones',
-    'ingresos', 'ingreso_vencimientos', 'cheques', 'cobros', 'deudas', 'deuda_cuotas',
-    'egresos', 'transferencias'
-  ] loop
-    execute format('drop policy if exists "Acceso libre temporal" on cashflow.%I', t);
+  for r in
+    select tablename from pg_policies
+     where schemaname = 'cashflow' and policyname = 'Acceso libre temporal'
+  loop
+    execute format('drop policy "Acceso libre temporal" on cashflow.%I', r.tablename);
   end loop;
 end;
 $$;

@@ -70,6 +70,9 @@ begin
     execute format('alter view public.%I set schema cashflow', v_nombre);
   end loop;
 
+  -- Primero se mueven TODAS las funciones y recién después se reescriben:
+  -- las funciones SQL se validan al recrearlas, y una que llama a otra
+  -- (fn_cashflow → cashflow.hoy()) falla si la otra todavía está en public.
   for r in
     select p.oid, p.proname
       from pg_proc p
@@ -78,8 +81,17 @@ begin
   loop
     execute format('alter function public.%I(%s) set schema cashflow',
                    r.proname, pg_get_function_identity_arguments(r.oid));
-    -- Ya en cashflow: el encabezado sale como cashflow.x; el cuerpo sigue
-    -- nombrando public.x (search_path = '') y se reescribe.
+  end loop;
+
+  -- Ya en cashflow: el encabezado sale como cashflow.x; el cuerpo sigue
+  -- nombrando public.x (search_path = '') y se reescribe.
+  for r in
+    select p.oid, p.proname
+      from pg_proc p
+     where p.pronamespace = 'cashflow'::regnamespace
+       and p.proname = any (v_funciones)
+       and p.prosrc ilike '%public.%'
+  loop
     v_def := replace(pg_get_functiondef(r.oid), 'public.', 'cashflow.');
     execute v_def;
   end loop;

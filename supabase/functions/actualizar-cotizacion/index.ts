@@ -1,4 +1,4 @@
-// Trae el dólar MEP (bolsa) de dolarapi.com y lo guarda en public.cotizaciones.
+// Trae el dólar MEP (bolsa) de dolarapi.com y lo guarda en cashflow.cotizaciones.
 // La invoca pg_cron (ver migración de cotizaciones) y también puede llamarla el frontend.
 import { createClient } from "npm:@supabase/supabase-js@2";
 

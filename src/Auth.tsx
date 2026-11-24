@@ -10,7 +10,7 @@ export const useSession = () => useContext(SessionContext);
 
 /**
  * Acceso libre (sin login, rol anon): APAGADO. Se cerró con la migración
- * 20261124000002_cerrar_acceso_libre, antes de compartir el proyecto Supabase
+ * 20261124234155_cerrar_acceso_libre, antes de compartir el proyecto Supabase
  * con el ERP y AGRORIV. La app vuelve al magic link + lista de autorizados.
  */
 export const ACCESO_LIBRE = false;
