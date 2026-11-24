@@ -8,9 +8,9 @@ Tesorería y cash flow (ingresos, cheques, deudas, egresos, cuentas) con React +
 2. Copiar `.env.example` a `.env.local` y completar `VITE_SUPABASE_PUBLISHABLE_KEY`.
 3. `npm run dev` → http://localhost:3000
 
-> **Temporal: acceso libre, sin login.** `ACCESO_LIBRE = true` en `src/Auth.tsx` y la migración
-> `…_acceso_libre_temporal.sql` dan lectura/escritura total al rol anon. Para volver al login:
-> poner `ACCESO_LIBRE = false` y ejecutar el bloque "REVERTIR" de esa migración.
+> **Proyecto Supabase compartido.** Cashflow vive en el esquema `cashflow`; en el mismo proyecto están el
+> ERP (`public`) y AGRORIV (`agro`). El esquema `cashflow` tiene que figurar en Settings → API → Exposed schemas.
+> El acceso libre temporal (sin login) se cerró con `…_cerrar_acceso_libre.sql` (`ACCESO_LIBRE = false`).
 
 Con el login activado, el acceso es por **magic link**: el enlace crea el usuario de Supabase Auth si no existe, pero solo
 los emails cargados en la pantalla **Usuarios** (tabla `usuarios_autorizados`) ven y operan datos.

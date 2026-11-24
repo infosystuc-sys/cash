@@ -12,7 +12,7 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.18"
   }
-  public: {
+  cashflow: {
     Tables: {
       categorias_egreso: {
         Row: {
@@ -54,7 +54,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           cuenta_deposito_id: number | null
-          estado: Database["public"]["Enums"]["estado_cheque"]
+          estado: Database["cashflow"]["Enums"]["estado_cheque"]
           fecha_deposito: string | null
           fecha_emision: string | null
           fecha_endoso: string | null
@@ -70,8 +70,8 @@ export type Database = {
           notas: string | null
           numero: string
           proveedor_endoso_id: number | null
-          tipo: Database["public"]["Enums"]["tipo_cheque"]
-          tipo_endoso: Database["public"]["Enums"]["tipo_endoso"] | null
+          tipo: Database["cashflow"]["Enums"]["tipo_cheque"]
+          tipo_endoso: Database["cashflow"]["Enums"]["tipo_endoso"] | null
         }
         Insert: {
           banco_emisor: string
@@ -79,7 +79,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           cuenta_deposito_id?: number | null
-          estado?: Database["public"]["Enums"]["estado_cheque"]
+          estado?: Database["cashflow"]["Enums"]["estado_cheque"]
           fecha_deposito?: string | null
           fecha_emision?: string | null
           fecha_endoso?: string | null
@@ -95,8 +95,8 @@ export type Database = {
           notas?: string | null
           numero: string
           proveedor_endoso_id?: number | null
-          tipo?: Database["public"]["Enums"]["tipo_cheque"]
-          tipo_endoso?: Database["public"]["Enums"]["tipo_endoso"] | null
+          tipo?: Database["cashflow"]["Enums"]["tipo_cheque"]
+          tipo_endoso?: Database["cashflow"]["Enums"]["tipo_endoso"] | null
         }
         Update: {
           banco_emisor?: string
@@ -104,7 +104,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           cuenta_deposito_id?: number | null
-          estado?: Database["public"]["Enums"]["estado_cheque"]
+          estado?: Database["cashflow"]["Enums"]["estado_cheque"]
           fecha_deposito?: string | null
           fecha_emision?: string | null
           fecha_endoso?: string | null
@@ -120,8 +120,8 @@ export type Database = {
           notas?: string | null
           numero?: string
           proveedor_endoso_id?: number | null
-          tipo?: Database["public"]["Enums"]["tipo_cheque"]
-          tipo_endoso?: Database["public"]["Enums"]["tipo_endoso"] | null
+          tipo?: Database["cashflow"]["Enums"]["tipo_cheque"]
+          tipo_endoso?: Database["cashflow"]["Enums"]["tipo_endoso"] | null
         }
         Relationships: [
           {
@@ -205,8 +205,8 @@ export type Database = {
           id: number
           importe: number
           ingreso_vencimiento_id: number | null
-          medio: Database["public"]["Enums"]["medio_cobro"]
-          moneda: Database["public"]["Enums"]["moneda"]
+          medio: Database["cashflow"]["Enums"]["medio_cobro"]
+          moneda: Database["cashflow"]["Enums"]["moneda"]
           tc: number | null
         }
         Insert: {
@@ -221,8 +221,8 @@ export type Database = {
           id?: never
           importe: number
           ingreso_vencimiento_id?: number | null
-          medio: Database["public"]["Enums"]["medio_cobro"]
-          moneda?: Database["public"]["Enums"]["moneda"]
+          medio: Database["cashflow"]["Enums"]["medio_cobro"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           tc?: number | null
         }
         Update: {
@@ -237,8 +237,8 @@ export type Database = {
           id?: never
           importe?: number
           ingreso_vencimiento_id?: number | null
-          medio?: Database["public"]["Enums"]["medio_cobro"]
-          moneda?: Database["public"]["Enums"]["moneda"]
+          medio?: Database["cashflow"]["Enums"]["medio_cobro"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           tc?: number | null
         }
         Relationships: [
@@ -330,11 +330,11 @@ export type Database = {
           etiqueta: string | null
           fecha_saldo_inicial: string
           id: number
-          moneda: Database["public"]["Enums"]["moneda"]
+          moneda: Database["cashflow"]["Enums"]["moneda"]
           nombre: string
           numero: string | null
           saldo_inicial: number
-          tipo: Database["public"]["Enums"]["tipo_cuenta"]
+          tipo: Database["cashflow"]["Enums"]["tipo_cuenta"]
         }
         Insert: {
           activa?: boolean
@@ -345,11 +345,11 @@ export type Database = {
           etiqueta?: string | null
           fecha_saldo_inicial?: string
           id?: never
-          moneda?: Database["public"]["Enums"]["moneda"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           nombre: string
           numero?: string | null
           saldo_inicial?: number
-          tipo: Database["public"]["Enums"]["tipo_cuenta"]
+          tipo: Database["cashflow"]["Enums"]["tipo_cuenta"]
         }
         Update: {
           activa?: boolean
@@ -360,11 +360,11 @@ export type Database = {
           etiqueta?: string | null
           fecha_saldo_inicial?: string
           id?: never
-          moneda?: Database["public"]["Enums"]["moneda"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           nombre?: string
           numero?: string | null
           saldo_inicial?: number
-          tipo?: Database["public"]["Enums"]["tipo_cuenta"]
+          tipo?: Database["cashflow"]["Enums"]["tipo_cuenta"]
         }
         Relationships: []
       }
@@ -414,10 +414,10 @@ export type Database = {
           created_at: string
           created_by: string | null
           fecha_alta: string
-          forma_pago: Database["public"]["Enums"]["forma_pago_deuda"]
+          forma_pago: Database["cashflow"]["Enums"]["forma_pago_deuda"]
           id: number
           importe_total: number
-          moneda: Database["public"]["Enums"]["moneda"]
+          moneda: Database["cashflow"]["Enums"]["moneda"]
           notas: string | null
           proveedor_id: number
           referencia: string | null
@@ -429,10 +429,10 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           fecha_alta?: string
-          forma_pago?: Database["public"]["Enums"]["forma_pago_deuda"]
+          forma_pago?: Database["cashflow"]["Enums"]["forma_pago_deuda"]
           id?: never
           importe_total: number
-          moneda?: Database["public"]["Enums"]["moneda"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           notas?: string | null
           proveedor_id: number
           referencia?: string | null
@@ -444,10 +444,10 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           fecha_alta?: string
-          forma_pago?: Database["public"]["Enums"]["forma_pago_deuda"]
+          forma_pago?: Database["cashflow"]["Enums"]["forma_pago_deuda"]
           id?: never
           importe_total?: number
-          moneda?: Database["public"]["Enums"]["moneda"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           notas?: string | null
           proveedor_id?: number
           referencia?: string | null
@@ -489,8 +489,8 @@ export type Database = {
           fecha: string
           id: number
           importe: number
-          medio: Database["public"]["Enums"]["medio_pago"]
-          moneda: Database["public"]["Enums"]["moneda"]
+          medio: Database["cashflow"]["Enums"]["medio_pago"]
+          moneda: Database["cashflow"]["Enums"]["moneda"]
           proveedor_id: number | null
           tc: number | null
         }
@@ -505,8 +505,8 @@ export type Database = {
           fecha: string
           id?: never
           importe: number
-          medio: Database["public"]["Enums"]["medio_pago"]
-          moneda?: Database["public"]["Enums"]["moneda"]
+          medio: Database["cashflow"]["Enums"]["medio_pago"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           proveedor_id?: number | null
           tc?: number | null
         }
@@ -521,8 +521,8 @@ export type Database = {
           fecha?: string
           id?: never
           importe?: number
-          medio?: Database["public"]["Enums"]["medio_pago"]
-          moneda?: Database["public"]["Enums"]["moneda"]
+          medio?: Database["cashflow"]["Enums"]["medio_pago"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           proveedor_id?: number | null
           tc?: number | null
         }
@@ -661,7 +661,7 @@ export type Database = {
           fecha_factura: string
           id: number
           importe_total: number
-          moneda: Database["public"]["Enums"]["moneda"]
+          moneda: Database["cashflow"]["Enums"]["moneda"]
           tipo_ingreso_id: number
         }
         Insert: {
@@ -673,7 +673,7 @@ export type Database = {
           fecha_factura: string
           id?: never
           importe_total: number
-          moneda?: Database["public"]["Enums"]["moneda"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           tipo_ingreso_id: number
         }
         Update: {
@@ -685,7 +685,7 @@ export type Database = {
           fecha_factura?: string
           id?: never
           importe_total?: number
-          moneda?: Database["public"]["Enums"]["moneda"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           tipo_ingreso_id?: number
         }
         Relationships: [
@@ -843,7 +843,7 @@ export type Database = {
           id: number
           importe: number
           mes: string
-          moneda: Database["public"]["Enums"]["moneda"]
+          moneda: Database["cashflow"]["Enums"]["moneda"]
           notas: string | null
           tipo_ingreso_id: number
         }
@@ -853,7 +853,7 @@ export type Database = {
           id?: never
           importe: number
           mes: string
-          moneda?: Database["public"]["Enums"]["moneda"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           notas?: string | null
           tipo_ingreso_id: number
         }
@@ -863,7 +863,7 @@ export type Database = {
           id?: never
           importe?: number
           mes?: string
-          moneda?: Database["public"]["Enums"]["moneda"]
+          moneda?: Database["cashflow"]["Enums"]["moneda"]
           notas?: string | null
           tipo_ingreso_id?: number
         }
@@ -885,7 +885,7 @@ export type Database = {
           facturas: number | null
           importe: number | null
           mes: string | null
-          moneda: Database["public"]["Enums"]["moneda"] | null
+          moneda: Database["cashflow"]["Enums"]["moneda"] | null
           origen: string | null
           tipo_ingreso: string | null
           tipo_ingreso_id: number | null
@@ -930,7 +930,7 @@ export type Database = {
           cambio_proveedor_id: number | null
           fecha_cambio: string | null
           egreso_id: number | null
-          estado: Database["public"]["Enums"]["estado_cheque"] | null
+          estado: Database["cashflow"]["Enums"]["estado_cheque"] | null
           fecha_deposito: string | null
           fecha_emision: string | null
           fecha_endoso: string | null
@@ -948,8 +948,8 @@ export type Database = {
           numero: string | null
           proveedor_endoso: string | null
           proveedor_endoso_id: number | null
-          tipo: Database["public"]["Enums"]["tipo_cheque"] | null
-          tipo_endoso: Database["public"]["Enums"]["tipo_endoso"] | null
+          tipo: Database["cashflow"]["Enums"]["tipo_cheque"] | null
+          tipo_endoso: Database["cashflow"]["Enums"]["tipo_endoso"] | null
         }
         Relationships: [
           {
@@ -1017,13 +1017,13 @@ export type Database = {
           etiqueta: string | null
           fecha_saldo_inicial: string | null
           id: number | null
-          moneda: Database["public"]["Enums"]["moneda"] | null
+          moneda: Database["cashflow"]["Enums"]["moneda"] | null
           nombre: string | null
           numero: string | null
           saldo: number | null
           saldo_ars: number | null
           saldo_inicial: number | null
-          tipo: Database["public"]["Enums"]["tipo_cuenta"] | null
+          tipo: Database["cashflow"]["Enums"]["tipo_cuenta"] | null
           ultimo_mov_concepto: string | null
           ultimo_mov_fecha: string | null
           ultimo_mov_importe: number | null
@@ -1039,7 +1039,7 @@ export type Database = {
           fecha_vencimiento: string | null
           id: number | null
           importe: number | null
-          moneda: Database["public"]["Enums"]["moneda"] | null
+          moneda: Database["cashflow"]["Enums"]["moneda"] | null
           numero: number | null
           pagado: number | null
           proveedor_id: number | null
@@ -1081,10 +1081,10 @@ export type Database = {
           cuotas_total: number | null
           estado: string | null
           fecha_alta: string | null
-          forma_pago: Database["public"]["Enums"]["forma_pago_deuda"] | null
+          forma_pago: Database["cashflow"]["Enums"]["forma_pago_deuda"] | null
           id: number | null
           importe_total: number | null
-          moneda: Database["public"]["Enums"]["moneda"] | null
+          moneda: Database["cashflow"]["Enums"]["moneda"] | null
           notas: string | null
           pagado: number | null
           proveedor: string | null
@@ -1142,8 +1142,8 @@ export type Database = {
           id: number | null
           importe: number | null
           importe_ars: number | null
-          medio: Database["public"]["Enums"]["medio_pago"] | null
-          moneda: Database["public"]["Enums"]["moneda"] | null
+          medio: Database["cashflow"]["Enums"]["medio_pago"] | null
+          moneda: Database["cashflow"]["Enums"]["moneda"] | null
           proveedor: string | null
           proveedor_id: number | null
           tc: number | null
@@ -1239,7 +1239,7 @@ export type Database = {
           importe: number | null
           ingreso_id: number | null
           medio_previsto: string | null
-          moneda: Database["public"]["Enums"]["moneda"] | null
+          moneda: Database["cashflow"]["Enums"]["moneda"] | null
           numero: number | null
           saldo: number | null
           ultima_fecha_cobro: string | null
@@ -1297,7 +1297,7 @@ export type Database = {
           fecha_factura: string | null
           id: number | null
           importe_total: number | null
-          moneda: Database["public"]["Enums"]["moneda"] | null
+          moneda: Database["cashflow"]["Enums"]["moneda"] | null
           proxima_cuota: number | null
           proximo_saldo: number | null
           proximo_vencimiento: string | null
@@ -1348,8 +1348,8 @@ export type Database = {
           id: number | null
           importe_destino: number | null
           importe_origen: number | null
-          moneda_destino: Database["public"]["Enums"]["moneda"] | null
-          moneda_origen: Database["public"]["Enums"]["moneda"] | null
+          moneda_destino: Database["cashflow"]["Enums"]["moneda"] | null
+          moneda_origen: Database["cashflow"]["Enums"]["moneda"] | null
         }
         Relationships: [
           {
@@ -1392,7 +1392,7 @@ export type Database = {
           p_fecha_alta?: string
           p_id: number
           p_importe_total: number
-          p_moneda: Database["public"]["Enums"]["moneda"]
+          p_moneda: Database["cashflow"]["Enums"]["moneda"]
           p_notas?: string
           p_proveedor_id: number
           p_referencia?: string
@@ -1430,7 +1430,7 @@ export type Database = {
           p_fecha_factura: string
           p_id: number
           p_importe_total: number
-          p_moneda: Database["public"]["Enums"]["moneda"]
+          p_moneda: Database["cashflow"]["Enums"]["moneda"]
           p_tipo_ingreso_id: number
           p_vencimientos: Json
         }
@@ -1446,8 +1446,8 @@ export type Database = {
       }
       convertir: {
         Args: {
-          p_a: Database["public"]["Enums"]["moneda"]
-          p_de: Database["public"]["Enums"]["moneda"]
+          p_a: Database["cashflow"]["Enums"]["moneda"]
+          p_de: Database["cashflow"]["Enums"]["moneda"]
           p_importe: number
           p_tc: number
         }
@@ -1460,7 +1460,7 @@ export type Database = {
           p_cuotas: Json
           p_fecha_alta?: string
           p_importe_total: number
-          p_moneda: Database["public"]["Enums"]["moneda"]
+          p_moneda: Database["cashflow"]["Enums"]["moneda"]
           p_notas?: string
           p_proveedor_id: number
           p_referencia?: string
@@ -1475,7 +1475,7 @@ export type Database = {
           p_descripcion: string
           p_fecha_factura: string
           p_importe_total: number
-          p_moneda: Database["public"]["Enums"]["moneda"]
+          p_moneda: Database["cashflow"]["Enums"]["moneda"]
           p_tipo_ingreso_id: number
           p_vencimientos: Json
         }
@@ -1496,7 +1496,7 @@ export type Database = {
           p_motivo?: string
           p_proveedor_id: number
           p_tc?: number
-          p_tipo_endoso?: Database["public"]["Enums"]["tipo_endoso"]
+          p_tipo_endoso?: Database["cashflow"]["Enums"]["tipo_endoso"]
         }
         Returns: number
       }
@@ -1547,7 +1547,7 @@ export type Database = {
           p_cuenta_id?: number
           p_fecha: string
           p_importe: number
-          p_medio: Database["public"]["Enums"]["medio_cobro"]
+          p_medio: Database["cashflow"]["Enums"]["medio_cobro"]
           p_tc?: number
           p_vencimiento_id: number
         }
@@ -1560,7 +1560,7 @@ export type Database = {
           p_fecha_devolucion?: string
           p_importe: number
           p_ingreso_id: number
-          p_medio: Database["public"]["Enums"]["medio_cobro"]
+          p_medio: Database["cashflow"]["Enums"]["medio_cobro"]
           p_tc?: number
         }
         Returns: number
@@ -1583,7 +1583,7 @@ export type Database = {
           p_deuda_id: number
           p_fecha: string
           p_importe: number
-          p_medio: Database["public"]["Enums"]["medio_pago"]
+          p_medio: Database["cashflow"]["Enums"]["medio_pago"]
           p_tc?: number
         }
         Returns: number
@@ -1618,7 +1618,7 @@ export type Database = {
 
 type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
 
-type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "cashflow">]
 
 export type Tables<
   DefaultSchemaTableNameOrOptions extends
@@ -1734,7 +1734,7 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  public: {
+  cashflow: {
     Enums: {
       estado_cheque: ["en_cartera", "endosado", "depositado", "rechazado", "cambiado"],
       forma_pago_deuda: ["unico", "cuotas"],

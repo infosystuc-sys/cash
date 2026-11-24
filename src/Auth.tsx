@@ -9,10 +9,11 @@ const SessionContext = createContext<Session | null>(null);
 export const useSession = () => useContext(SessionContext);
 
 /**
- * TEMPORAL: sin login, la app usa el rol anon (ver migración acceso_libre_temporal).
- * Para volver al magic link + lista de autorizados: poner en false y revertir esa migración.
+ * Acceso libre (sin login, rol anon): APAGADO. Se cerró con la migración
+ * 20261124000002_cerrar_acceso_libre, antes de compartir el proyecto Supabase
+ * con el ERP y AGRORIV. La app vuelve al magic link + lista de autorizados.
  */
-export const ACCESO_LIBRE = true;
+export const ACCESO_LIBRE = false;
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   if (ACCESO_LIBRE) return <AccesoLibre>{children}</AccesoLibre>;

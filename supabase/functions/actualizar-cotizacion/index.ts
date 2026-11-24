@@ -25,9 +25,11 @@ Deno.serve(async (req) => {
       timeZone: "America/Argentina/Buenos_Aires",
     });
 
+    // Las tablas de Cashflow están en el esquema `cashflow` (proyecto compartido con el ERP y AGRORIV).
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      { db: { schema: "cashflow" } },
     );
 
     const fila = {
